@@ -2,6 +2,8 @@
 
 This is a Jetty build script. Jetty is a custom build tool with its own set of instructions
 
+Jettyfile
+
 ```jetty
 ARG TEST_ARG='arg works'
 ENV TEST_ENV='env works'
@@ -76,4 +78,26 @@ DIR ./itworks
 
 ```jetty
 CMD echo 'it works'
+```
+
+## Building Jetty
+
+Clone this project
+
+```bash
+go build .
+```
+
+## Usage
+
+```bash
+./jetty -h
+```
+
+Create Jettyfile in project directory
+
+Run jetty in project directory
+
+```bash
+./jetty build
 ```
