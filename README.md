@@ -1,6 +1,6 @@
-# Jetty Build Script
+# Jetty
 
-This is a Jetty build script. Jetty is a custom build tool with its own set of instructions
+Jetty is just another build tool
 
 Jettyfile
 
