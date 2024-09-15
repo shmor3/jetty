@@ -26,9 +26,3 @@ jobs:
 
     - name: Test
       run: go test -v ./...
-
-    - name: Format
-      run: go fmt ./...
-
-    - name: Format
-      run: go mod tidy -v ./...
