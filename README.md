@@ -6,8 +6,10 @@ jettyctl is a concurrent build system that processes build instructions from a f
 
 -   Concurrent execution of build instructions
 -   Worker pool for distributed processing
--   Support for various build directives (ARG, ENV, RUN, CMD, DIR, WDR)
+-   Support for various build directives (ARG, ENV, RUN, CMD, DIR, WDR, FRM)
 -   Real-time build status tracking
+-   Asynchronous execution with \*RUN flag
+-   Sub-build support with FRM directive
 
 Executes the build process for a given file:
 
@@ -15,48 +17,49 @@ Executes the build process for a given file:
 2. Assigns the build to a worker
 3. Parses and executes instructions from the file
 4. Handles concurrent execution of instructions
-5. Executes the final CMD instruction if present
+5. Supports asynchronous execution with \*RUN
+6. Allows nested builds with FRM directive
+7. Executes the final CMD instruction if present
 
 ## jettyctlfile
 
-```jettyctl
 ARG TEST_ARG='arg works'
 ENV TEST_ENV='env works'
 RUN echo 'run works'
 RUN echo $TEST_ENV
 RUN echo $TEST_ARG \
-    echo 'multiline works' \
-    echo 1 \
-    echo 2 \
-    echo 3
-*RUN sleep 5
+ echo 'multiline works' \
+ echo 1 \
+ echo 2 \
+ echo 3
+\*RUN sleep 5
 DIR ./test
 WDR ./test
 DIR ./itworks
+FRM ./sub-build.jettyctl
 CMD echo 'it works'
-```
 
 ## ARG: Defines a build-time variable
 
-```jettyctl
+```jetty
 ARG TEST_ARG='arg works'
 ```
 
 ## ENV: Sets an environment variable for the build process
 
-```jettyctl
+```jetty
 ENV TEST_ENV='env works'
 ```
 
 ## RUN: Executes a command during the build
 
-```jettyctl
+```jetty
 RUN echo 'run works'
 ```
 
 ## Another RUN command, echoing the value of an environment variable
 
-```jettyctl
+```jetty
 RUN echo $TEST_ENV
 ```
 
@@ -64,7 +67,7 @@ RUN echo $TEST_ENV
 
 Demonstrates how jettyctl handles multi-line instructions
 
-```jettyctl
+```jetty
 RUN echo $TEST_ARG \
  echo 'multiline works' \
  echo 1 \
@@ -72,33 +75,41 @@ RUN echo $TEST_ARG \
  echo 3
 ```
 
+## \*RUN: Executes a command asynchronously
+
+```jetty
+*RUN sleep 5
+```
+
 ## DIR: Changes the working directory for subsequent operations
 
-```jettyctl
+```jetty
 DIR ./test
 ```
 
 ## WDR: Another directory-related instruction (purpose may need clarification)
 
-```jettyctl
-WDR ./test
-```
+````jetty
+WDR .```
+/test
 
 ## Another DIR instruction
 
-```jettyctl
+```jetty
 DIR ./itworks
-```
+````
 
 ## CMD: Specifies the command to run when the build completes
 
-```jettyctl
+```jetty
 CMD echo 'it works'
 ```
 
 ## Building jettyctl
 
+```bash
 Clone this project
+```
 
 ```bash
 go build .
@@ -106,7 +117,7 @@ go build .
 
 ## Usage
 
-```bash
+```jetty
 ./jettyctl -h
 ```
 
@@ -119,27 +130,27 @@ init
 ```
 
 -   Description: Create a new Jettyfile in the current directory
--   Usage: `jettyctl init`
+-   Usage: jettyctl init
 
 ```jetty
 ps
 ```
 
 -   Description: View the status of builds
--   Usage: `jettyctl ps [-a] [-f filter]`
+-   Usage: jettyctl ps [-a] [-f filter]
 -   Options:
--   `-a`: Show all builds (active and completed)
--   `-f`: Filter builds (e.g., "id=buildid")
+-   -a: Show all builds (active and completed)
+-   -f: Filter builds (e.g., "id=buildid")
 
 ```jetty
 build
 ```
 
 -   Description: Run a new build
--   Usage: `jettyctl build -f filename`
+-   Usage: jettyctl build -f filename
 -   Options:
--   `-f`: Specify the build file
+-   -f: Specify the build file
 
-```bash
+```jetty
 ./jettyctl build
 ```
