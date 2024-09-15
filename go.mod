@@ -1,3 +1,3 @@
-module jetty
+module jettyctl
 
 go 1.23
