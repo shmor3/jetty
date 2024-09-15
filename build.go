@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,8 +18,10 @@ const (
 )
 
 var (
-	argsMutex sync.Mutex
-	envMutex  sync.Mutex
+	argsMutex        sync.Mutex
+	envMutex         sync.Mutex
+	globalWorkerPool []*WorkerNode
+	workerPoolOnce   sync.Once
 )
 
 type BuildInfo struct {
@@ -28,15 +32,16 @@ type BuildInfo struct {
 	WorkerNode string
 }
 
-type Instruction struct {
-	Directive string
-	Args      string
-}
-
 type WorkerNode struct {
 	ID    string
 	Jobs  chan Job
 	mutex sync.Mutex
+	quit  chan struct{}
+}
+
+type Instruction struct {
+	Directive string
+	Args      string
 }
 
 type Job struct {
@@ -44,23 +49,15 @@ type Job struct {
 	FileName      string
 	ResultChan    chan<- string
 	BuildInfoChan chan<- BuildInfo
+	WorkerNode    string
+	Context       context.Context
 }
 
-func NewWorkerNode(id string) *WorkerNode {
-	return &WorkerNode{
-		ID:   id,
-		Jobs: make(chan Job),
-	}
+func initializeGlobalWorkerPool(numWorkers int) {
+	workerPoolOnce.Do(func() {
+		globalWorkerPool = createWorkerPool(numWorkers)
+	})
 }
-
-func (w *WorkerNode) Start() {
-	go func() {
-		for job := range w.Jobs {
-			build(job.FileName, job.BuildID, w.ID, job.ResultChan, job.BuildInfoChan)
-		}
-	}()
-}
-
 func createWorkerPool(numWorkers int) []*WorkerNode {
 	workers := make([]*WorkerNode, numWorkers)
 	for i := 0; i < numWorkers; i++ {
@@ -70,10 +67,40 @@ func createWorkerPool(numWorkers int) []*WorkerNode {
 	return workers
 }
 
-func assignBuildToWorker(workers []*WorkerNode, job Job) {
+func NewWorkerNode(id string) *WorkerNode {
+	return &WorkerNode{
+		ID:   id,
+		Jobs: make(chan Job),
+		quit: make(chan struct{}),
+	}
+}
+
+func (w *WorkerNode) Start() {
+	go func() {
+		for {
+			select {
+			case job := <-w.Jobs:
+				_ = job
+			case <-w.quit:
+				return
+			}
+		}
+	}()
+}
+
+func (w *WorkerNode) Stop() {
+	close(w.quit)
+}
+
+func assignBuildToWorker(job Job) {
+	if job.Context == nil {
+		job.ResultChan <- "Error: job context is nil"
+		close(job.ResultChan)
+		return
+	}
 	var selectedWorker *WorkerNode
-	minJobs := int(^uint(0) >> 1) // Max int value
-	for _, worker := range workers {
+	minJobs := int(^uint(0) >> 1)
+	for _, worker := range globalWorkerPool {
 		worker.mutex.Lock()
 		jobCount := len(worker.Jobs)
 		worker.mutex.Unlock()
@@ -82,111 +109,173 @@ func assignBuildToWorker(workers []*WorkerNode, job Job) {
 			minJobs = jobCount
 		}
 	}
-	if selectedWorker != nil {
-		selectedWorker.mutex.Lock()
-		selectedWorker.Jobs <- job
-		selectedWorker.mutex.Unlock()
+	if job.Context == nil {
+		job.Context = context.Background()
+	}
+	select {
+	case <-job.Context.Done():
+		job.ResultChan <- "Job cancelled before assignment"
+		close(job.ResultChan)
+	case selectedWorker.Jobs <- job:
 	}
 }
 
-func listActiveBuilds(buildInfoChan <-chan BuildInfo, outputChan chan<- map[string]BuildInfo) {
+func listActiveBuilds(buildInfoChan <-chan BuildInfo, outputChan chan<- map[string]BuildInfo, done <-chan struct{}) {
 	activeBuilds := make(map[string]BuildInfo)
 	var mutex sync.Mutex
-	for buildInfo := range buildInfoChan {
-		mutex.Lock()
-		switch buildInfo.Status {
-		case statusRunning:
-			activeBuilds[buildInfo.ID] = buildInfo
-		case statusCompleted, statusFailed:
-			delete(activeBuilds, buildInfo.ID)
+	for {
+		select {
+		case buildInfo, ok := <-buildInfoChan:
+			if !ok {
+				return
+			}
+			mutex.Lock()
+			switch buildInfo.Status {
+			case statusRunning:
+				activeBuilds[buildInfo.ID] = buildInfo
+			case statusCompleted, statusFailed:
+				delete(activeBuilds, buildInfo.ID)
+			}
+			outputChan <- activeBuilds
+			mutex.Unlock()
+		case <-done:
+			return
 		}
-		outputChan <- activeBuilds
-		mutex.Unlock()
 	}
 }
 
-func build(fileName string, buildID string, workerNode string, resultChan chan<- string, buildInfoChan chan<- BuildInfo) {
-	numWorkers := 4
-	workers := createWorkerPool(numWorkers)
-	job := Job{
-		BuildID:       buildID,
-		FileName:      fileName,
-		ResultChan:    resultChan,
-		BuildInfoChan: buildInfoChan,
+func processBuild(job Job) {
+	defer close(job.ResultChan)
+	defer close(job.BuildInfoChan)
+	if job.Context == nil {
+		job.ResultChan <- "Error: job context is nil"
+		return
 	}
-	assignBuildToWorker(workers, job)
 	buildInfo := BuildInfo{
-		ID:         buildID,
-		Status:     "Running",
+		ID:         job.BuildID,
+		Status:     statusRunning,
 		StartTime:  time.Now(),
-		WorkerNode: workerNode,
+		WorkerNode: job.WorkerNode,
 	}
-	buildInfoChan <- buildInfo
-	go func() {
-		defer close(resultChan)
-		defer func() {
-			buildInfo.EndTime = time.Now()
-			buildInfo.Status = "Completed"
-			buildInfoChan <- buildInfo
-		}()
-		if fileName == "" {
-			resultChan <- "Error: please provide a file name"
-			buildInfo.Status = "Failed"
-			buildInfoChan <- buildInfo
+	job.BuildInfoChan <- buildInfo
+	select {
+	case <-job.Context.Done():
+		job.ResultChan <- "Build cancelled"
+		buildInfo.Status = statusFailed
+		job.BuildInfoChan <- buildInfo
+		return
+	default:
+	}
+	if job.FileName == "" {
+		job.ResultChan <- "Error: please provide a file name"
+		buildInfo.Status = statusFailed
+		job.BuildInfoChan <- buildInfo
+		return
+	}
+	instructions, err := parseFile(job.FileName)
+	if err != nil {
+		job.ResultChan <- fmt.Sprintf("Error parsing file: %v", err)
+		buildInfo.Status = statusFailed
+		job.BuildInfoChan <- buildInfo
+		return
+	}
+	args := make(map[string]string)
+	env := make(map[string]string)
+	var wg sync.WaitGroup
+	totalInstructions := len(instructions)
+	currentInstruction := 0
+	var cmdInstruction *Instruction
+	var concurrentErrors []error
+	for _, inst := range instructions {
+		select {
+		case <-job.Context.Done():
+			job.ResultChan <- "Build cancelled"
+			buildInfo.Status = statusFailed
+			job.BuildInfoChan <- buildInfo
 			return
-		}
-		instructions, err := parseFile(fileName)
-		if err != nil {
-			resultChan <- fmt.Sprintf("Error parsing file: %v", err)
-			buildInfo.Status = "Failed"
-			buildInfoChan <- buildInfo
-			return
-		}
-		args := make(map[string]string)
-		env := make(map[string]string)
-		var cmdInstruction *Instruction
-		var wg sync.WaitGroup
-		for _, inst := range instructions {
+		default:
+			currentInstruction++
 			if inst.Directive == "CMD" {
 				if cmdInstruction != nil {
-					resultChan <- "Error: multiple CMD directives are not allowed"
-					buildInfo.Status = "Failed"
-					buildInfoChan <- buildInfo
+					job.ResultChan <- fmt.Sprintf("(%d/%d) Error: multiple CMD directives are not allowed", currentInstruction, totalInstructions)
+					buildInfo.Status = statusFailed
+					job.BuildInfoChan <- buildInfo
 					return
 				}
 				cmdInstruction = &inst
 				continue
 			}
-			if strings.HasPrefix(inst.Directive, "*") {
-				wg.Add(1)
-				go func(instruction Instruction) {
-					defer wg.Done()
-					err := executeInstructionConcurrent(instruction, args, resultChan)
-					if err != nil {
-						resultChan <- fmt.Sprintf("Error executing instruction: %v", err)
-					}
-				}(inst)
-			} else {
-				err := executeInstruction(inst, args, resultChan)
+		}
+		if strings.HasPrefix(inst.Directive, "*") {
+			wg.Add(1)
+			go func(instruction Instruction, count int) {
+				defer wg.Done()
+				err := executeInstructionConcurrent(instruction, args, job.ResultChan)
 				if err != nil {
-					resultChan <- fmt.Sprintf("Error executing instruction: %v", err)
-					buildInfo.Status = "Failed"
-					buildInfoChan <- buildInfo
-					return
+					job.ResultChan <- fmt.Sprintf("(%d/%d) Error: executing instruction: %v", count, totalInstructions, err)
+					concurrentErrors = append(concurrentErrors, err)
 				}
-			}
-		}
-		wg.Wait()
-		if cmdInstruction != nil {
-			err := executeCMD(*cmdInstruction, env, resultChan)
+			}(inst, currentInstruction)
+		} else {
+			err := executeInstruction(inst, args, job.ResultChan)
 			if err != nil {
-				resultChan <- fmt.Sprintf("Error executing CMD instruction: %v", err)
-				buildInfo.Status = "Failed"
-				buildInfoChan <- buildInfo
+				job.ResultChan <- fmt.Sprintf("(%d/%d) Error: executing instruction: %v", currentInstruction, totalInstructions, err)
+				buildInfo.Status = statusFailed
+				job.BuildInfoChan <- buildInfo
+				return
 			}
 		}
-	}()
+	}
+	wg.Wait()
+	if len(concurrentErrors) > 0 {
+		job.ResultChan <- fmt.Sprintf("Errors occurred during concurrent execution: %v", concurrentErrors)
+		buildInfo.Status = statusFailed
+		job.BuildInfoChan <- buildInfo
+		return
+	}
+	if cmdInstruction != nil {
+		err := executeCMD(*cmdInstruction, env, job.ResultChan)
+		if err != nil {
+			job.ResultChan <- fmt.Sprintf("(%d/%d) Error: executing CMD instruction: %v", totalInstructions, totalInstructions, err)
+			buildInfo.Status = statusFailed
+		} else {
+			buildInfo.Status = statusCompleted
+		}
+	} else {
+		buildInfo.Status = statusCompleted
+	}
+	job.BuildInfoChan <- buildInfo
 }
+
+func build(fileName string, buildID string, workerNode string, resultChan chan<- string, buildInfoChan chan<- BuildInfo) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	done := make(chan struct{})
+	job := Job{
+		BuildID:       buildID,
+		FileName:      fileName,
+		ResultChan:    resultChan,
+		BuildInfoChan: buildInfoChan,
+		WorkerNode:    workerNode,
+		Context:       ctx,
+	}
+	go func() {
+		processBuild(job)
+		close(done)
+	}()
+	select {
+	case <-ctx.Done():
+		resultChan <- "Build timed out or was cancelled"
+		buildInfoChan <- BuildInfo{
+			ID:         buildID,
+			Status:     statusFailed,
+			EndTime:    time.Now(),
+			WorkerNode: workerNode,
+		}
+	case <-done:
+	}
+}
+
 func executeCMD(inst Instruction, env map[string]string, resultChan chan<- string) error {
 	cmd := exec.Command("sh", "-c", inst.Args)
 	cmd.Env = os.Environ()
@@ -206,7 +295,14 @@ func executeInstructionConcurrent(inst Instruction, args map[string]string, resu
 	return executeInstruction(inst, args, resultChan)
 }
 
+func isAlphanumeric(r byte) bool {
+	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+}
+
 func executeInstruction(inst Instruction, args map[string]string, resultChan chan<- string) error {
+	if len(inst.Directive) > 1 && !isAlphanumeric(inst.Directive[0]) {
+		inst.Directive = inst.Directive[1:]
+	}
 	logMessage := func(format string, v ...interface{}) {
 		msg := fmt.Sprintf(format, v...)
 		resultChan <- msg + "\n"
@@ -242,7 +338,7 @@ func executeInstruction(inst Instruction, args map[string]string, resultChan cha
 			return fmt.Errorf("failed to set environment variable: %v", err)
 		}
 		envMutex.Unlock()
-		logMessage("ENV: %s=%s\n", key, expandedValue)
+		logMessage("ENV: %s=%s", key, expandedValue)
 	case "RUN":
 		expandedArgs := expandArgs(inst.Args, args)
 		if err := validateLinuxCommand(expandedArgs); err != nil {
@@ -253,20 +349,21 @@ func executeInstruction(inst Instruction, args map[string]string, resultChan cha
 		if err != nil {
 			return fmt.Errorf("command execution failed: %v", err)
 		}
-		logMessage("Done: %s\n", string(output))
+		logMessage("Done: %s", string(output))
 	case "DIR":
 		expandedArgs := expandArgs(inst.Args, args)
-		err := os.MkdirAll(expandedArgs, 0755)
+		err := os.MkdirAll(filepath.Clean(expandedArgs), 0755)
 		if err != nil {
 			return fmt.Errorf("directory creation failed: %v", err)
 		}
-		logMessage("Done: %s\n", "directory created")
+		logMessage("DIR: %s", expandedArgs)
 	case "WDR":
 		parts := strings.Fields(inst.Args)
 		if len(parts) != 1 {
 			return fmt.Errorf("only one directory allowed per WDR directive: %s", inst.Args)
 		}
 		expandedDir := expandArgs(parts[0], args)
+		expandedDir = filepath.Clean(expandedDir)
 		if _, err := os.Stat(expandedDir); os.IsNotExist(err) {
 			return fmt.Errorf("directory does not exist: %s", expandedDir)
 		}
@@ -275,6 +372,40 @@ func executeInstruction(inst Instruction, args map[string]string, resultChan cha
 			return fmt.Errorf("failed to change directory: %v", err)
 		}
 		logMessage("WDR: Changed working directory to %s", expandedDir)
+	case "FRM":
+		referencedFile := inst.Args
+		subBuildID := fmt.Sprintf("%s-sub-%d", args["BUILD_ID"], time.Now().UnixNano())
+		subResultChan := make(chan string)
+		subBuildInfoChan := make(chan BuildInfo)
+		go build(referencedFile, subBuildID, args["WORKER_NODE"], subResultChan, subBuildInfoChan)
+		timeout := time.After(5 * time.Minute)
+		resultDone := make(chan bool)
+		infoDone := make(chan bool)
+		go func() {
+			for result := range subResultChan {
+				resultChan <- fmt.Sprintf("Sub-build %s: %s", subBuildID, result)
+			}
+			resultDone <- true
+		}()
+		go func() {
+			for buildInfo := range subBuildInfoChan {
+				if buildInfo.Status == statusCompleted || buildInfo.Status == statusFailed {
+					resultChan <- fmt.Sprintf("Sub-build %s completed with status: %s", subBuildID, buildInfo.Status)
+					infoDone <- true
+					return
+				}
+			}
+			infoDone <- true
+		}()
+		select {
+		case <-resultDone:
+			<-infoDone
+		case <-infoDone:
+			<-resultDone
+		case <-timeout:
+			resultChan <- fmt.Sprintf("Sub-build %s timed out", subBuildID)
+		}
+		logMessage("Done: Executed instructions from %s", referencedFile)
 	default:
 		return fmt.Errorf("unknown directive: %s", inst.Directive)
 	}

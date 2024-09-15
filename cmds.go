@@ -20,7 +20,7 @@ func registeredCommands() {
 				return fmt.Errorf("failed to create Jettyfile: %v", err)
 			}
 			defer file.Close()
-			_, err = file.WriteString("# Jettyfile\n\n# Add your build instructions here\n")
+			_, err = file.WriteString("# Jettyfile\n\n# Add your build instructions here\n\n")
 			if err != nil {
 				return fmt.Errorf("failed to write to Jettyfile: %v", err)
 			}
@@ -43,22 +43,25 @@ func registeredCommands() {
 			}
 			buildInfoChan := make(chan BuildInfo)
 			outputChan := make(chan map[string]BuildInfo)
-			go listActiveBuilds(buildInfoChan, outputChan)
+			done := make(chan struct{})
+			go listActiveBuilds(buildInfoChan, outputChan, done)
 			builds := <-outputChan
 			if *allFlag {
-				fmt.Println("All builds (active and completed):")
+				logger.Println("All builds (active and completed):")
 			} else {
-				fmt.Println("Active builds:")
+				logger.Println("Active builds:")
 			}
 			matchesFilter := func(id string, info BuildInfo, filter string) bool {
 				return id == filter || info.Status == filter || info.WorkerNode == filter
 			}
 			for id, info := range builds {
 				if (*allFlag || info.Status == "Running") && (*filterFlag == "" || matchesFilter(id, info, *filterFlag)) {
-					fmt.Printf("Build ID: %s, Status: %s, Worker: %s, Start Time: %s\n",
+					logger.Printf("Build ID: %s, Status: %s, Worker: %s, Start Time: %s\n",
 						id, info.Status, info.WorkerNode, info.StartTime)
 				}
 			}
+			close(done)
+			<-done
 			return nil
 		},
 		MinArgs: 0,
@@ -94,18 +97,35 @@ func registeredCommands() {
 			}
 			resultChan := make(chan string)
 			buildInfoChan := make(chan BuildInfo)
+			done := make(chan struct{})
+			var lastBuildInfo BuildInfo
 			go func() {
-				for result := range resultChan {
-					if logger.Flags()&log.LstdFlags != 0 {
-						logger.Printf("Build: %s", result)
-					} else {
-						fmt.Println(result)
+				defer close(done)
+				for {
+					select {
+					case result, ok := <-resultChan:
+						if !ok {
+							return
+						}
+						if logger.Flags()&log.LstdFlags != 0 {
+							logger.Printf("Build: %s", result)
+						} else {
+							fmt.Println(result)
+						}
+					case buildInfo, ok := <-buildInfoChan:
+						if !ok {
+							return
+						}
+						lastBuildInfo = buildInfo
 					}
 				}
 			}()
-			buildID := fmt.Sprintf("build-%d", time.Now().UnixNano())
+			buildID := fmt.Sprintf("%d", time.Now().UnixNano())
 			workerNode := "default-worker"
-			go build(fileName, buildID, workerNode, resultChan, buildInfoChan)
+			build(fileName, buildID, workerNode, resultChan, buildInfoChan)
+			<-done
+			logger.Printf("Build %s: Status: %s, Worker: %s",
+				lastBuildInfo.ID, lastBuildInfo.Status, lastBuildInfo.WorkerNode)
 			return nil
 		},
 		MinArgs: 0,
