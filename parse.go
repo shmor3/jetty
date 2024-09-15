@@ -21,8 +21,14 @@ func parseFile(fileName string) ([]Instruction, error) {
 		"RUN": {"*"},
 		"CMD": {},
 		"DIR": {},
+		"CPY": {"*"},
 		"WDR": {},
+		"SUB": {"*"},
 		"FRM": {},
+		"JET": {},
+		"FMT": {"^", "$", "&"},
+		"BOX": {},
+		"USE": {},
 	}
 
 	var instructions []Instruction
