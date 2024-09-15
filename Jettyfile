@@ -1,7 +1,7 @@
 # Jettyfile
 
 # Add your build instructions here
-FRM ./Jettyfile1
+SUB ./sub.Jettyfile
 ARG TEST_ARG='arg works'
 ENV TEST_ENV='env works'
 RUN echo 'run works'

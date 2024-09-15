@@ -6,10 +6,10 @@ jettyctl is a concurrent build system that processes build instructions from a f
 
 -   Concurrent execution of build instructions
 -   Worker pool for distributed processing
--   Support for various build directives (ARG, ENV, RUN, CMD, DIR, WDR, FRM)
+-   Support for various build directives (ARG, ENV, RUN, CMD, DIR, CPY, WDR, SUB, FRM, BOX, USE, JET)
 -   Real-time build status tracking
 -   Asynchronous execution with \*RUN flag
--   Sub-build support with FRM directive
+-   Sub-build support with SUB directive
 
 Executes the build process for a given file:
 
@@ -18,7 +18,7 @@ Executes the build process for a given file:
 3. Parses and executes instructions from the file
 4. Handles concurrent execution of instructions
 5. Supports asynchronous execution with \*RUN
-6. Allows nested builds with FRM directive
+6. Allows nested builds with SUB directive
 7. Executes the final CMD instruction if present
 
 ## jettyctlfile
@@ -36,7 +36,7 @@ RUN echo $TEST_ARG \
 DIR ./test
 WDR ./test
 DIR ./itworks
-FRM ./sub-build.jettyctl
+SUB ./sub-build.jettyctl
 CMD echo 'it works'
 
 ## ARG: Defines a build-time variable
