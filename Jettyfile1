@@ -1,0 +1,17 @@
+# Jettyfile
+
+# Add your build instructions here
+ARG TEST_ARG='arg works'
+ENV TEST_ENV='env works'
+RUN echo 'run works'
+RUN echo $TEST_ENV
+RUN echo $TEST_ARG \
+    echo 'multiline works' \
+    echo 1 \
+    echo 2 \
+    echo 3
+*RUN sleep 1
+DIR ./test
+WDR ./test
+DIR ./itworks
+CMD echo 'final step'

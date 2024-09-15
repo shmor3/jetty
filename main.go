@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	defaultCommand  = "status"
+	defaultCommand  = "ps"
 	defaultTimeout  = 30 * time.Second
 	version         = "1.0.0"
 	ErrInvalidInput = errors.New("invalid input")
@@ -41,12 +41,19 @@ type Command struct {
 func init() {
 	logger = log.New(os.Stderr, "", 0)
 	registeredCommands()
+	initializeGlobalWorkerPool(4)
 }
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	setupSignalHandling(cancel)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		logger.Println("Received termination signal. Initiating graceful shutdown...")
+		cancel()
+	}()
 	config, err := parseFlags()
 	if err != nil {
 		logger.Fatalf("Error: %v", err)
@@ -65,55 +72,27 @@ func main() {
 	} else {
 		logger.SetFlags(0)
 	}
-	if err := handleSubcommands(ctx, os.Args[1:]); err != nil {
-		if errors.Is(err, context.Canceled) {
-			logger.Println("Operation canceled")
-		} else {
-			logger.Printf("Error: %v\n", err)
-			flag.Usage()
-		}
-		os.Exit(1)
-	}
-}
-
-func setupSignalHandling(cancel context.CancelFunc) {
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
 	go func() {
-		<-sigChan
-		logger.Println("Received termination signal. Shutting down...")
-		cancel()
-	}()
-}
-
-func parseFlags() (*Config, error) {
-	config := &Config{}
-	flag.BoolVar(&config.Help, "help", false, "Show help message")
-	flag.BoolVar(&config.Help, "h", false, "Show help message (shorthand)")
-	flag.BoolVar(&config.Verbose, "verbose", false, "Enable verbose output")
-	flag.BoolVar(&config.Verbose, "v", false, "Enable verbose output (shorthand)")
-	flag.BoolVar(&config.Version, "version", false, "Show version information")
-	flag.Usage = customUsage
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if len(arg) > 1 && arg[0] == '-' {
-			if len(arg) > 2 && arg[1] == '-' {
-				name := arg[2:]
-				if f := flag.Lookup(name); f != nil {
-					f.Value.Set("true")
-				}
+		if err := handleSubcommands(ctx, os.Args[1:]); err != nil {
+			if errors.Is(err, context.Canceled) {
+				logger.Println("Operation canceled")
 			} else {
-				name := arg[1:]
-				if f := flag.Lookup(name); f != nil {
-					f.Value.Set("true")
-				}
+				logger.Printf("Error: %v\n", err)
+				flag.Usage()
 			}
-		} else {
-			break
 		}
+		close(done)
+	}()
+	select {
+	case <-ctx.Done():
+		logger.Println("Waiting for ongoing operations to complete...")
+		<-done
+		logger.Println("Graceful shutdown complete")
+	case <-done:
+		logger.Println("All operations completed successfully")
 	}
-	return config, nil
+	logger.Println("Exiting program")
 }
 
 func customUsage() {
@@ -157,9 +136,19 @@ func handleSubcommands(ctx context.Context, args []string) error {
 	if err := validateArgs(cmd, filteredArgs[1:]); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	cmdCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	return cmd.Run(ctx, filteredArgs[1:])
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- cmd.Run(cmdCtx, filteredArgs[1:])
+	}()
+	select {
+	case <-ctx.Done():
+		logger.Println("Operation canceled")
+		return ctx.Err()
+	case err := <-errChan:
+		return err
+	}
 }
 
 func showCommandHelp(cmdName string) error {
@@ -175,16 +164,6 @@ func showCommandHelp(cmdName string) error {
 			logger.Printf("  %-10s %s\n", name, subcmd.Description)
 			logger.Printf("    Usage: %s %s %s\n", os.Args[0], cmdName, subcmd.Usage)
 		}
-	}
-	return nil
-}
-
-func validateArgs(cmd Command, args []string) error {
-	if len(args) < cmd.MinArgs {
-		return fmt.Errorf("%w: not enough arguments for command '%s'", ErrInvalidInput, cmd.Name)
-	}
-	if cmd.MaxArgs > 0 && len(args) > cmd.MaxArgs {
-		return fmt.Errorf("%w: too many arguments for command '%s'", ErrInvalidInput, cmd.Name)
 	}
 	return nil
 }
