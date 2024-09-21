@@ -32,18 +32,15 @@ type BuildInfo struct {
 	EndTime    time.Time
 	WorkerNode string
 }
-
 type WorkerNode struct {
 	ID   string
 	Jobs chan Job
 	quit chan struct{}
 }
-
 type Instruction struct {
 	Directive string
 	Args      string
 }
-
 type Job struct {
 	BuildID       string
 	FileName      string
@@ -66,7 +63,6 @@ func createWorkerPool(numWorkers int) []*WorkerNode {
 	}
 	return workers
 }
-
 func NewWorkerNode(id string) *WorkerNode {
 	return &WorkerNode{
 		ID:   id,
@@ -74,7 +70,6 @@ func NewWorkerNode(id string) *WorkerNode {
 		quit: make(chan struct{}),
 	}
 }
-
 func (w *WorkerNode) Start() {
 	go func() {
 		for {
@@ -87,11 +82,9 @@ func (w *WorkerNode) Start() {
 		}
 	}()
 }
-
 func (w *WorkerNode) Stop() {
 	close(w.quit)
 }
-
 func listActiveBuilds(buildInfoChan <-chan BuildInfo, outputChan chan<- map[string]BuildInfo, done <-chan struct{}) {
 	activeBuilds := make(map[string]BuildInfo)
 	var mutex sync.Mutex
@@ -115,7 +108,6 @@ func listActiveBuilds(buildInfoChan <-chan BuildInfo, outputChan chan<- map[stri
 		}
 	}
 }
-
 func processBuild(job Job) {
 	defer close(job.ResultChan)
 	defer close(job.BuildInfoChan)
@@ -218,7 +210,6 @@ func processBuild(job Job) {
 	}
 	job.BuildInfoChan <- buildInfo
 }
-
 func build(fileName string, buildID string, workerNode string, resultChan chan<- string, buildInfoChan chan<- BuildInfo) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -247,7 +238,6 @@ func build(fileName string, buildID string, workerNode string, resultChan chan<-
 	case <-done:
 	}
 }
-
 func executeCMD(inst Instruction, env map[string]string, resultChan chan<- string) error {
 	cmd := exec.Command("sh", "-c", inst.Args)
 	cmd.Env = os.Environ()
@@ -261,7 +251,6 @@ func executeCMD(inst Instruction, env map[string]string, resultChan chan<- strin
 	resultChan <- fmt.Sprintf("Done: %s\n", string(output))
 	return nil
 }
-
 func execInContainer(inst Instruction, env map[string]string, resultChan chan<- string, containerID *string, repository string, tag string, containerName string) error {
 	pool, err := dockertest.NewPool("")
 	if err != nil {
