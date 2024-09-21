@@ -33,7 +33,7 @@ func registeredCommands() {
 	registerCommand("ps", Command{
 		Name:        "ps",
 		Description: "View the status of builds",
-		Usage:       "jettyctl ps [-a] [-f filter]",
+		Usage:       "jetty ps [-a] [-f filter]",
 		Run: func(ctx context.Context, args []string) error {
 			fs := flag.NewFlagSet("ps", flag.ContinueOnError)
 			allFlag := fs.Bool("a", false, "Show all builds (active and completed)")
@@ -76,7 +76,7 @@ func registeredCommands() {
 	registerCommand("build", Command{
 		Name:        "build",
 		Description: "Run a new build",
-		Usage:       "jettyctl build -f filename",
+		Usage:       "jetty build -f filename",
 		Run: func(ctx context.Context, args []string) error {
 			fs := flag.NewFlagSet("build", flag.ContinueOnError)
 			fileFlag := fs.String("f", "", "Specify the build file")

@@ -1,7 +1,6 @@
 # Jettyfile
 
 # Add your build instructions here
-SUB ./sub.Jettyfile
 ARG TEST_ARG='arg works'
 ENV TEST_ENV='env works'
 RUN echo 'run works'
@@ -11,7 +10,7 @@ RUN echo $TEST_ARG \
     echo 1 \
     echo 2 \
     echo 3
-*RUN sleep 1
+*RUN sleep 15
 DIR ./test
 WDR ./test
 DIR ./itworks
