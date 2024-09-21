@@ -1,5 +1,4 @@
-````markdown
-# jetty: A Concurrent Build System
+## jetty: A Concurrent Build System
 
 jetty is a powerful, concurrent build system that processes build instructions from a file and executes them in a distributed manner using worker nodes. It's designed for efficiency, flexibility, and ease of use in complex build environments.
 
@@ -46,7 +45,6 @@ DIR ./itworks
 SUB ./sub-build.jetty
 CMD echo 'it works'
 ```
-````
 
 ## Directives and Symbols
 
@@ -141,8 +139,3 @@ If you encounter any issues or have questions, please file an issue on the GitHu
 ---
 
 Happy building with jetty! 🚀
-
-```
-
-This version of the README.md is now consistent with the codebase we've seen and ready to be committed.
-```
