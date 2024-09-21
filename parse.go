@@ -14,7 +14,6 @@ func parseFile(fileName string) ([]Instruction, error) {
 		return nil, err
 	}
 	defer file.Close()
-
 	validDirectives := map[string][]string{
 		"ARG": {},
 		"ENV": {},
@@ -30,7 +29,6 @@ func parseFile(fileName string) ([]Instruction, error) {
 		"BOX": {},
 		"USE": {},
 	}
-
 	var instructions []Instruction
 	scanner := bufio.NewScanner(file)
 	var multiLineCommand string
@@ -74,7 +72,6 @@ func parseFile(fileName string) ([]Instruction, error) {
 	}
 	return instructions, nil
 }
-
 func expandArgs(s string, args map[string]string) string {
 	return os.Expand(s, func(k string) string {
 		if v, ok := args[k]; ok {
@@ -83,7 +80,6 @@ func expandArgs(s string, args map[string]string) string {
 		return "$" + k
 	})
 }
-
 func parseFlags() (*Config, error) {
 	config := &Config{}
 	flag.BoolVar(&config.Help, "help", false, "Show help message")
@@ -113,7 +109,6 @@ func parseFlags() (*Config, error) {
 	}
 	return config, nil
 }
-
 func validateArgs(cmd Command, args []string) error {
 	if len(args) < cmd.MinArgs {
 		return fmt.Errorf("%w: not enough arguments for command '%s'", ErrInvalidInput, cmd.Name)

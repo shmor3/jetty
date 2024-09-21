@@ -10,7 +10,6 @@ import (
 func isAlphanumeric(r byte) bool {
 	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
 }
-
 func copyFile(src, dst string) error {
 	sourceFile, err := os.Open(src)
 	if err != nil {
@@ -25,7 +24,6 @@ func copyFile(src, dst string) error {
 	_, err = io.Copy(destFile, sourceFile)
 	return err
 }
-
 func copyDir(src, dst string) error {
 	srcInfo, err := os.Stat(src)
 	if err != nil {
@@ -53,7 +51,6 @@ func copyDir(src, dst string) error {
 	}
 	return nil
 }
-
 func appendToFile(filename, content string) error {
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {

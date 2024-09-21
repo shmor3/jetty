@@ -26,7 +26,6 @@ type Config struct {
 	Verbose bool
 	Version bool
 }
-
 type Command struct {
 	Name        string
 	Description string
@@ -43,7 +42,6 @@ func init() {
 	registeredCommands()
 	initializeGlobalWorkerPool(4)
 }
-
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -94,7 +92,6 @@ func main() {
 	}
 	logger.Println("Exiting program")
 }
-
 func customUsage() {
 	logger.Printf("Usage: %s [options] [command]\n\n", os.Args[0])
 	logger.Println("Options:")
@@ -104,7 +101,6 @@ func customUsage() {
 		logger.Printf("  %-10s %s\n", cmd.Name, cmd.Description)
 	}
 }
-
 func handleSubcommands(ctx context.Context, args []string) error {
 	verbose := false
 	showHelp := false
@@ -150,7 +146,6 @@ func handleSubcommands(ctx context.Context, args []string) error {
 		return err
 	}
 }
-
 func showCommandHelp(cmdName string) error {
 	cmd, found := commands[cmdName]
 	if !found {
@@ -167,7 +162,6 @@ func showCommandHelp(cmdName string) error {
 	}
 	return nil
 }
-
 func registerCommand(name string, cmd Command) {
 	if cmd.Flags == nil {
 		cmd.Flags = flag.NewFlagSet(name, flag.ContinueOnError)

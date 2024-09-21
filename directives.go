@@ -13,7 +13,6 @@ func executeInstructionConcurrent(inst Instruction, args map[string]string, resu
 	inst.Directive = strings.TrimPrefix(inst.Directive, "*")
 	return executeInstruction(inst, args, resultChan)
 }
-
 func executeInstruction(inst Instruction, args map[string]string, resultChan chan<- string) error {
 	if len(inst.Directive) > 1 && !isAlphanumeric(inst.Directive[0]) {
 		inst.Directive = inst.Directive[1:]
@@ -175,7 +174,6 @@ func executeInstruction(inst Instruction, args map[string]string, resultChan cha
 		boxName, repository, tag := parts[0], parts[1], parts[2]
 		boxes[boxName] = BoxInfo{Repository: repository, Tag: tag}
 		logMessage("BOX: Created box %s with image %s:%s", boxName, repository, tag)
-
 	case "USE":
 		parts := strings.Fields(inst.Args)
 		if len(parts) < 2 {
@@ -193,7 +191,6 @@ func executeInstruction(inst Instruction, args map[string]string, resultChan cha
 			return fmt.Errorf("failed to execute in container: %v", err)
 		}
 		logMessage("USE: Executed command in box %s", boxName)
-
 	case "FMT", "^FMT", "$FMT", "&FMT":
 		parts := strings.SplitN(inst.Args, " ", 3)
 		if len(parts) < 2 {
