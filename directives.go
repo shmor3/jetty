@@ -25,10 +25,7 @@ func executeInstruction(inst Instruction, args map[string]string, resultChan cha
 		Repository string
 		Tag        string
 	}
-	var boxes map[string]BoxInfo
-	if boxes == nil {
-		boxes = make(map[string]BoxInfo)
-	}
+	boxes := make(map[string]BoxInfo)
 	switch inst.Directive {
 	case "ARG":
 		parts := strings.SplitN(inst.Args, "=", 2)
