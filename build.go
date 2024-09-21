@@ -19,10 +19,9 @@ const (
 )
 
 var (
-	argsMutex        sync.Mutex
-	envMutex         sync.Mutex
-	workerPoolOnce   sync.Once
-	globalWorkerPool []*WorkerNode
+	argsMutex      sync.Mutex
+	envMutex       sync.Mutex
+	workerPoolOnce sync.Once
 )
 
 type BuildInfo struct {
@@ -52,7 +51,7 @@ type Job struct {
 
 func initializeGlobalWorkerPool(numWorkers int) {
 	workerPoolOnce.Do(func() {
-		globalWorkerPool = createWorkerPool(numWorkers)
+		createWorkerPool(numWorkers)
 	})
 }
 func createWorkerPool(numWorkers int) []*WorkerNode {
