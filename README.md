@@ -1,6 +1,6 @@
 ## jetty: A Concurrent Build System
 
-jetty is a powerful, concurrent build system that processes build instructions from a file and executes them in a distributed manner using worker nodes. It's designed for efficiency, flexibility, and ease of use in complex build environments.
+jetty is a concurrent build system that processes build instructions from a file and executes them in a distributed manner using worker nodes. It's designed for efficiency, flexibility, and ease of use in complex build environments.
 
 ## Features
 
