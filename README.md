@@ -73,7 +73,7 @@ CMD echo 'it works'
 1. Clone the repository:
 
     ```bash
-    git clone https://github.com/yourusername/jetty.git
+    git clone https://github.com/shmor3/jetty.git
     ```
 
 2. Build the project:
