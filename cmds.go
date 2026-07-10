@@ -51,6 +51,9 @@ func registeredCommands() {
 			if err := fs.Parse(args); err != nil {
 				return err
 			}
+			if fs.NArg() != 0 {
+				return fmt.Errorf("%w: ps does not accept positional arguments: %s", ErrInvalidInput, strings.Join(fs.Args(), " "))
+			}
 			builds, err := readBuildInfos()
 			if err != nil {
 				return fmt.Errorf("failed to read build status: %w", err)
@@ -106,6 +109,9 @@ func registeredCommands() {
 			fileName := *fileFlag
 			if fileName == "" && fs.NArg() > 0 {
 				fileName = fs.Arg(0)
+			}
+			if fs.NArg() > 1 || (fileName != "" && *fileFlag != "" && fs.NArg() > 0) {
+				return fmt.Errorf("%w: build accepts either -f or one positional file", ErrInvalidInput)
 			}
 			if fileName == "" {
 				if _, err := os.Stat("Jettyfile"); err == nil {

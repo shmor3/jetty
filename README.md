@@ -77,6 +77,8 @@ CMD echo finished
 
 `RUN` and `CMD` use `sh -c` on Unix. On Windows, Jetty uses `sh -c` when `sh` is available, otherwise it falls back to `cmd /C`.
 
+Argument and environment names must start with a letter or underscore and may contain only letters, numbers, and underscores. `CPY` refuses to copy a directory into itself or one of its descendants.
+
 ## Paths
 
 Relative paths are resolved from the directory containing the current Jettyfile. After `WDR`, relative paths resolve from the new build-local working directory. Jetty does not mutate the parent process working directory.
