@@ -40,6 +40,7 @@ type Command struct {
 
 func init() {
 	logger = log.New(os.Stderr, "", 0)
+	flag.Usage = customUsage
 	registeredCommands()
 }
 

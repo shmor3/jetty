@@ -6,9 +6,6 @@ import (
 	"path/filepath"
 )
 
-func isAlphanumeric(r byte) bool {
-	return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-}
 func copyFile(src, dst string) error {
 	sourceFile, err := os.Open(src)
 	if err != nil {
