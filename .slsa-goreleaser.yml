@@ -1,0 +1,15 @@
+version: 1
+
+env:
+  - CGO_ENABLED=0
+
+flags:
+  - -trimpath
+
+ldflags:
+  - -s -w
+
+goos: linux
+goarch: amd64
+
+binary: jetty-{{ .Os }}-{{ .Arch }}
