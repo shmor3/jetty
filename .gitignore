@@ -1,0 +1,5 @@
+.jetty/
+jetty
+jetty.exe
+*.test
+coverage.out

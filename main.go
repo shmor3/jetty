@@ -8,13 +8,14 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 )
 
 var (
 	defaultCommand  = "ps"
-	defaultTimeout  = 30 * time.Second
+	defaultTimeout  = 10 * time.Minute
 	version         = "1.0.0"
 	ErrInvalidInput = errors.New("invalid input")
 	commands        = make(map[string]Command)
@@ -40,8 +41,8 @@ type Command struct {
 func init() {
 	logger = log.New(os.Stderr, "", 0)
 	registeredCommands()
-	initializeGlobalWorkerPool(4)
 }
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -70,37 +71,34 @@ func main() {
 	} else {
 		logger.SetFlags(0)
 	}
-	done := make(chan struct{})
-	go func() {
-		if err := handleSubcommands(ctx, os.Args[1:]); err != nil {
-			if errors.Is(err, context.Canceled) {
-				logger.Println("Operation canceled")
-			} else {
-				logger.Printf("Error: %v\n", err)
-				flag.Usage()
-			}
+	if err := handleSubcommands(ctx, os.Args[1:]); err != nil {
+		if errors.Is(err, context.Canceled) {
+			logger.Println("Operation canceled")
+		} else {
+			logger.Printf("Error: %v\n", err)
 		}
-		close(done)
-	}()
-	select {
-	case <-ctx.Done():
-		logger.Println("Waiting for ongoing operations to complete...")
-		<-done
-		logger.Println("Graceful shutdown complete")
-	case <-done:
-		logger.Println("All operations completed successfully")
+		os.Exit(1)
 	}
-	logger.Println("Exiting program")
 }
+
 func customUsage() {
 	logger.Printf("Usage: %s [options] [command]\n\n", os.Args[0])
 	logger.Println("Options:")
-	flag.PrintDefaults()
+	logger.Println("  -h, --help       Show help message")
+	logger.Println("  -v, --verbose    Enable verbose output")
+	logger.Println("  --version        Show version information")
 	logger.Println("\nCommands:")
-	for _, cmd := range commands {
+	names := make([]string, 0, len(commands))
+	for name := range commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		cmd := commands[name]
 		logger.Printf("  %-10s %s\n", cmd.Name, cmd.Description)
 	}
 }
+
 func handleSubcommands(ctx context.Context, args []string) error {
 	verbose := false
 	showHelp := false
@@ -139,13 +137,13 @@ func handleSubcommands(ctx context.Context, args []string) error {
 		errChan <- cmd.Run(cmdCtx, filteredArgs[1:])
 	}()
 	select {
-	case <-ctx.Done():
-		logger.Println("Operation canceled")
-		return ctx.Err()
+	case <-cmdCtx.Done():
+		return cmdCtx.Err()
 	case err := <-errChan:
 		return err
 	}
 }
+
 func showCommandHelp(cmdName string) error {
 	cmd, found := commands[cmdName]
 	if !found {
@@ -153,6 +151,11 @@ func showCommandHelp(cmdName string) error {
 	}
 	logger.Printf("Usage: %s %s\n", os.Args[0], cmd.Usage)
 	logger.Printf("Description: %s\n", cmd.Description)
+	if cmd.Flags != nil {
+		logger.Println("\nOptions:")
+		cmd.Flags.SetOutput(os.Stderr)
+		cmd.Flags.PrintDefaults()
+	}
 	if len(cmd.Subcommands) > 0 {
 		logger.Println("\nSubcommands:")
 		for name, subcmd := range cmd.Subcommands {
@@ -162,36 +165,14 @@ func showCommandHelp(cmdName string) error {
 	}
 	return nil
 }
+
 func registerCommand(name string, cmd Command) {
 	if cmd.Flags == nil {
 		cmd.Flags = flag.NewFlagSet(name, flag.ContinueOnError)
 	}
-	cmd.Flags.Bool("verbose", false, "Enable verbose output")
-	cmd.Flags.String("output", "", "Specify output format")
-	originalRun := cmd.Run
-	cmd.Run = func(ctx context.Context, args []string) error {
-		if err := cmd.Flags.Parse(args); err != nil {
-			return err
-		}
-		if cmd.Flags.Lookup("verbose").Value.(flag.Getter).Get().(bool) {
-			logger.Println("Verbose mode enabled for command:", name)
-		}
-		return originalRun(ctx, cmd.Flags.Args())
-	}
-	for subName, subcmd := range cmd.Subcommands {
+	for _, subcmd := range cmd.Subcommands {
 		if subcmd.Flags == nil {
-			subcmd.Flags = flag.NewFlagSet(subName, flag.ContinueOnError)
-		}
-		subcmd.Flags.Bool("debug", false, "Enable debug mode")
-		originalSubRun := subcmd.Run
-		subcmd.Run = func(ctx context.Context, args []string) error {
-			if err := subcmd.Flags.Parse(args); err != nil {
-				return err
-			}
-			if subcmd.Flags.Lookup("debug").Value.(flag.Getter).Get().(bool) {
-				logger.Println("Debug mode enabled for subcommand:", subName)
-			}
-			return originalSubRun(ctx, subcmd.Flags.Args())
+			subcmd.Flags = flag.NewFlagSet(subcmd.Name, flag.ContinueOnError)
 		}
 	}
 	commands[name] = cmd

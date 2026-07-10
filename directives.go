@@ -1,241 +1,465 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/google/shlex"
+	"github.com/ory/dockertest/v3"
 )
 
-func executeInstructionConcurrent(inst Instruction, args map[string]string, resultChan chan<- string) error {
-	inst.Directive = strings.TrimPrefix(inst.Directive, "*")
-	return executeInstruction(inst, args, resultChan)
-}
-func executeInstruction(inst Instruction, args map[string]string, resultChan chan<- string) error {
-	if len(inst.Directive) > 1 && !isAlphanumeric(inst.Directive[0]) {
-		inst.Directive = inst.Directive[1:]
-	}
-	logMessage := func(format string, v ...interface{}) {
-		msg := fmt.Sprintf(format, v...)
-		resultChan <- msg + "\n"
-	}
-	type BoxInfo struct {
-		Repository string
-		Tag        string
-	}
-	boxes := make(map[string]BoxInfo)
+func executeInstruction(state *BuildState, inst Instruction) error {
 	switch inst.Directive {
 	case "ARG":
-		parts := strings.SplitN(inst.Args, "=", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid ARG format: %s", inst.Args)
+		key, value, err := parseAssignment(inst.Args, "ARG")
+		if err != nil {
+			return err
 		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		if strings.Contains(key, " ") {
-			return fmt.Errorf("only one ARG allowed per directive: %s", inst.Args)
-		}
-		argsMutex.Lock()
-		args[key] = expandArgs(value, args)
-		argsMutex.Unlock()
+		state.Args[key] = state.expand(value)
 	case "ENV":
-		parts := strings.SplitN(inst.Args, "=", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid ENV format: %s", inst.Args)
+		key, value, err := parseAssignment(inst.Args, "ENV")
+		if err != nil {
+			return err
 		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		if strings.Contains(key, " ") {
-			return fmt.Errorf("only one ENV allowed per directive: %s", inst.Args)
-		}
-		expandedValue := expandArgs(value, args)
-		envMutex.Lock()
-		if err := os.Setenv(key, expandedValue); err != nil {
-			envMutex.Unlock()
-			return fmt.Errorf("failed to set environment variable: %v", err)
-		}
-		envMutex.Unlock()
-		logMessage("ENV: %s=%s", key, expandedValue)
+		state.Env[key] = state.expand(value)
+		state.log("ENV: %s=%s", key, state.Env[key])
 	case "RUN":
-		expandedArgs := expandArgs(inst.Args, args)
-		if err := validateLinuxCommand(expandedArgs); err != nil {
-			return fmt.Errorf("invalid RUN command: %v", err)
+		if err := executeShell(state, "RUN", inst.Args); err != nil {
+			return err
 		}
-		cmd := exec.Command("sh", "-c", expandedArgs)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("command execution failed: %v", err)
-		}
-		logMessage("Done: %s", string(output))
 	case "DIR":
-		expandedArgs := expandArgs(inst.Args, args)
-		err := os.MkdirAll(filepath.Clean(expandedArgs), 0755)
+		dir, err := state.singlePath(inst.Args, "DIR")
 		if err != nil {
-			return fmt.Errorf("directory creation failed: %v", err)
+			return err
 		}
-		logMessage("DIR: %s", expandedArgs)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("directory creation failed: %w", err)
+		}
+		state.log("DIR: %s", dir)
 	case "WDR":
-		parts := strings.Fields(inst.Args)
-		if len(parts) != 1 {
-			return fmt.Errorf("only one directory allowed per WDR directive: %s", inst.Args)
-		}
-		expandedDir := expandArgs(parts[0], args)
-		expandedDir = filepath.Clean(expandedDir)
-		if _, err := os.Stat(expandedDir); os.IsNotExist(err) {
-			return fmt.Errorf("directory does not exist: %s", expandedDir)
-		}
-		err := os.Chdir(expandedDir)
+		dir, err := state.singlePath(inst.Args, "WDR")
 		if err != nil {
-			return fmt.Errorf("failed to change directory: %v", err)
+			return err
 		}
-		logMessage("WDR: Changed working directory to %s", expandedDir)
-	case "CPY", "*CPY":
-		parts := strings.Fields(inst.Args)
-		if len(parts) != 2 {
-			return fmt.Errorf("CPY directive requires exactly two arguments: source and destination")
+		info, err := os.Stat(dir)
+		if err != nil {
+			return fmt.Errorf("working directory does not exist: %s", dir)
 		}
-		src := expandArgs(parts[0], args)
-		dst := expandArgs(parts[1], args)
-		copyFunc := func() {
-			srcInfo, err := os.Stat(src)
-			if err != nil {
-				logMessage("Error accessing source: %v", err)
-				return
-			}
-			if srcInfo.IsDir() {
-				err = copyDir(src, dst)
-			} else {
-				err = copyFile(src, dst)
-			}
-			if err != nil {
-				logMessage("Copy operation failed: %v", err)
-			} else {
-				logMessage("CPY: Copied from %s to %s", src, dst)
-			}
+		if !info.IsDir() {
+			return fmt.Errorf("working directory is not a directory: %s", dir)
 		}
-		if inst.Directive == "*CPY" {
-			go copyFunc()
-			logMessage("Started asynchronous copy: %s to %s", src, dst)
-		} else {
-			copyFunc()
+		state.WorkDir = dir
+		state.log("WDR: %s", dir)
+	case "CPY":
+		if err := executeCopy(state, inst.Args); err != nil {
+			return err
 		}
-	case "SUB", "*SUB":
-		referencedFile := inst.Args
-		subBuildID := fmt.Sprintf("%s-sub-%d", args["BUILD_ID"], time.Now().UnixNano())
-		subResultChan := make(chan string)
-		subBuildInfoChan := make(chan BuildInfo)
-		buildFunc := func() {
-			go build(referencedFile, subBuildID, args["WORKER_NODE"], subResultChan, subBuildInfoChan)
-			timeout := time.After(5 * time.Minute)
-			resultDone := make(chan bool)
-			infoDone := make(chan bool)
-			go func() {
-				for result := range subResultChan {
-					resultChan <- fmt.Sprintf("Sub-build %s: %s", subBuildID, result)
-				}
-				resultDone <- true
-			}()
-			go func() {
-				for buildInfo := range subBuildInfoChan {
-					if buildInfo.Status == statusCompleted || buildInfo.Status == statusFailed {
-						resultChan <- fmt.Sprintf("Sub-build %s completed with status: %s", subBuildID, buildInfo.Status)
-						infoDone <- true
-						return
-					}
-				}
-				infoDone <- true
-			}()
-			select {
-			case <-resultDone:
-				<-infoDone
-			case <-infoDone:
-				<-resultDone
-			case <-timeout:
-				resultChan <- fmt.Sprintf("Sub-build %s timed out", subBuildID)
-			}
+	case "SUB":
+		if err := executeSubBuild(state, inst.Args); err != nil {
+			return err
 		}
-		if inst.Directive == "*SUB" {
-			go buildFunc()
-			logMessage("Started asynchronous sub-build: %s", referencedFile)
-		} else {
-			buildFunc()
-			logMessage("Completed synchronous sub-build: %s", referencedFile)
+	case "FRM":
+		box, err := parseImageReference(strings.TrimSpace(state.expand(inst.Args)))
+		if err != nil {
+			return err
 		}
+		state.Boxes["default"] = box
+		state.DefaultBox = "default"
+		state.log("FRM: default box %s:%s", box.Repository, box.Tag)
 	case "BOX":
-		parts := strings.Fields(inst.Args)
-		if len(parts) != 3 {
-			return fmt.Errorf("BOX directive requires exactly three arguments: name, repository, and tag")
+		if err := executeBox(state, inst.Args); err != nil {
+			return err
 		}
-		boxName, repository, tag := parts[0], parts[1], parts[2]
-		boxes[boxName] = BoxInfo{Repository: repository, Tag: tag}
-		logMessage("BOX: Created box %s with image %s:%s", boxName, repository, tag)
 	case "USE":
-		parts := strings.Fields(inst.Args)
-		if len(parts) < 2 {
-			return fmt.Errorf("USE directive requires at least two arguments: box name and command")
+		if err := executeUse(state, inst.Args); err != nil {
+			return err
 		}
-		boxName, cmd := parts[0], strings.Join(parts[1:], " ")
-		boxInfo, ok := boxes[boxName]
-		if !ok {
-			return fmt.Errorf("box not found: %s", boxName)
-		}
-		containerName := fmt.Sprintf("%s-%d", boxName, time.Now().UnixNano())
-		containerID := ""
-		err := execInContainer(Instruction{Args: cmd}, args, resultChan, &containerID, boxInfo.Repository, boxInfo.Tag, containerName)
-		if err != nil {
-			return fmt.Errorf("failed to execute in container: %v", err)
-		}
-		logMessage("USE: Executed command in box %s", boxName)
-	case "FMT", "^FMT", "$FMT", "&FMT":
-		parts := strings.SplitN(inst.Args, " ", 3)
-		if len(parts) < 2 {
-			return fmt.Errorf("%s directive requires at least two arguments: format string and arguments", inst.Directive)
-		}
-		formatString := parts[0]
-		argsList := strings.Split(parts[1], " ")
-		expandedArgs := make([]interface{}, len(argsList))
-		for i, arg := range argsList {
-			expandedArgs[i] = expandArgs(arg, args)
-		}
-		formattedString := fmt.Sprintf(formatString, expandedArgs...)
-		switch inst.Directive {
-		case "^FMT":
-			file := expandArgs(argsList[len(argsList)-1], args)
-			if err := appendToFile(file, formattedString); err != nil {
-				return fmt.Errorf("failed to append to file: %v", err)
-			}
-			logMessage("^FMT: Appended formatted string to %s", file)
-		case "$FMT":
-			if len(parts) != 3 {
-				return fmt.Errorf("$FMT directive requires three arguments: format string, arguments, and variable name")
-			}
-			varName := parts[2]
-			if err := os.Setenv(varName, formattedString); err != nil {
-				return fmt.Errorf("failed to set environment variable: %v", err)
-			}
-			logMessage("&FMT: Exported formatted string to environment variable %s", varName)
-		case "&FMT":
-			if len(parts) != 3 {
-				return fmt.Errorf("&FMT directive requires three arguments: format string, arguments, and argument name")
-			}
-			argName := parts[2]
-			args[argName] = formattedString
-			logMessage("&FMT: Exported formatted string to argument %s", argName)
-		default:
-			logMessage("FMT: %s", formattedString)
+	case "FMT":
+		if err := executeFormat(state, inst); err != nil {
+			return err
 		}
 	case "JET":
-		pluginName := strings.TrimSpace(inst.Args)
-		pluginPath := filepath.Join("./plugins", pluginName)
-		if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
-			return fmt.Errorf("plugin not found: %s", pluginName)
+		if err := executePlugin(state, inst.Args); err != nil {
+			return err
 		}
-		logMessage("JET: Found plugin %s", pluginName)
-		// TODO: Implement plugin execution logic
 	default:
 		return fmt.Errorf("unknown directive: %s", inst.Directive)
 	}
 	return nil
+}
+
+func executeCMD(state *BuildState, inst Instruction) error {
+	return executeShell(state, "CMD", inst.Args)
+}
+
+func executeShell(state *BuildState, label string, script string) error {
+	expandedScript := strings.TrimSpace(state.expand(script))
+	if err := validateLinuxCommand(expandedScript); err != nil {
+		return fmt.Errorf("invalid %s command: %w", label, err)
+	}
+	cmd := shellCommand(state.Context, expandedScript)
+	cmd.Dir = state.WorkDir
+	cmd.Env = state.commandEnv()
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		state.log("%s: %s", label, strings.TrimRight(string(output), "\r\n"))
+	}
+	if err != nil {
+		return fmt.Errorf("%s command failed: %w", label, err)
+	}
+	return nil
+}
+
+func executeCopy(state *BuildState, args string) error {
+	parts, err := splitArgs(args)
+	if err != nil {
+		return err
+	}
+	if len(parts) != 2 {
+		return fmt.Errorf("CPY requires exactly two arguments: source and destination")
+	}
+	src := state.resolvePath(state.expand(parts[0]))
+	dst := state.resolvePath(state.expand(parts[1]))
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("source does not exist: %s", src)
+	}
+	if srcInfo.IsDir() {
+		err = copyDir(src, dst)
+	} else {
+		err = copyFile(src, dst)
+	}
+	if err != nil {
+		return fmt.Errorf("copy failed: %w", err)
+	}
+	state.log("CPY: %s -> %s", src, dst)
+	return nil
+}
+
+func executeSubBuild(state *BuildState, args string) error {
+	referencedFile, err := state.singlePath(args, "SUB")
+	if err != nil {
+		return err
+	}
+	subBuildID := fmt.Sprintf("%s-sub-%d", state.BuildID, time.Now().UnixNano())
+	subResultChan := make(chan string)
+	subBuildInfoChan := make(chan BuildInfo)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for result := range subResultChan {
+			state.log("Sub-build %s: %s", subBuildID, strings.TrimRight(result, "\r\n"))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for buildInfo := range subBuildInfoChan {
+			if buildInfo.Status == statusCompleted || buildInfo.Status == statusFailed {
+				state.log("Sub-build %s status: %s", subBuildID, buildInfo.Status)
+			}
+		}
+	}()
+
+	err = processBuild(Job{
+		BuildID:       subBuildID,
+		FileName:      referencedFile,
+		ResultChan:    subResultChan,
+		BuildInfoChan: subBuildInfoChan,
+		WorkerNode:    state.WorkerNode,
+		Context:       state.Context,
+		InitialArgs:   state.Args,
+		InitialEnv:    state.Env,
+	})
+	wg.Wait()
+	if err != nil {
+		return fmt.Errorf("sub-build %s failed: %w", referencedFile, err)
+	}
+	state.log("SUB: %s", referencedFile)
+	return nil
+}
+
+func executeBox(state *BuildState, args string) error {
+	parts, err := splitArgs(args)
+	if err != nil {
+		return err
+	}
+	if len(parts) != 2 && len(parts) != 3 {
+		return fmt.Errorf("BOX requires name and image, or name, repository, and tag")
+	}
+	name := state.expand(parts[0])
+	var box BoxInfo
+	if len(parts) == 2 {
+		box, err = parseImageReference(state.expand(parts[1]))
+	} else {
+		box = BoxInfo{
+			Repository: state.expand(parts[1]),
+			Tag:        state.expand(parts[2]),
+		}
+	}
+	if err != nil {
+		return err
+	}
+	state.Boxes[name] = box
+	if state.DefaultBox == "" {
+		state.DefaultBox = name
+	}
+	state.log("BOX: %s=%s:%s", name, box.Repository, box.Tag)
+	return nil
+}
+
+func executeUse(state *BuildState, args string) error {
+	parts, err := splitArgs(args)
+	if err != nil {
+		return err
+	}
+	if len(parts) == 0 {
+		return fmt.Errorf("USE requires a box name and command, or a default FRM box and command")
+	}
+
+	boxName := state.DefaultBox
+	command := strings.TrimSpace(args)
+	candidateBoxName := state.expand(parts[0])
+	if _, ok := state.Boxes[candidateBoxName]; ok {
+		boxName = candidateBoxName
+		command = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(args), parts[0]))
+	}
+	if boxName == "" {
+		return fmt.Errorf("USE requires a known box name when no FRM default is configured")
+	}
+	if strings.TrimSpace(command) == "" {
+		return fmt.Errorf("USE requires a command")
+	}
+	box := state.Boxes[boxName]
+	output, err := execInContainer(state.Context, command, state.Env, box)
+	if len(output) > 0 {
+		state.log("USE %s: %s", boxName, strings.TrimRight(output, "\r\n"))
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func executeFormat(state *BuildState, inst Instruction) error {
+	parts, err := splitArgs(inst.Args)
+	if err != nil {
+		return err
+	}
+	if len(parts) == 0 {
+		return fmt.Errorf("FMT requires a format string")
+	}
+
+	switch inst.Symbol {
+	case "":
+		formatted := sprintfExpanded(state, parts[0], parts[1:])
+		state.log("FMT: %s", formatted)
+	case "^":
+		if len(parts) < 2 {
+			return fmt.Errorf("^FMT requires a file and format string")
+		}
+		file := state.resolvePath(state.expand(parts[0]))
+		formatted := sprintfExpanded(state, parts[1], parts[2:])
+		if err := appendToFile(file, formatted); err != nil {
+			return fmt.Errorf("failed to append to file: %w", err)
+		}
+		state.log("^FMT: %s", file)
+	case "$":
+		if len(parts) < 2 {
+			return fmt.Errorf("$FMT requires an environment variable and format string")
+		}
+		name := state.expand(parts[0])
+		state.Env[name] = sprintfExpanded(state, parts[1], parts[2:])
+		state.log("$FMT: %s=%s", name, state.Env[name])
+	case "&":
+		if len(parts) < 2 {
+			return fmt.Errorf("&FMT requires an argument name and format string")
+		}
+		name := state.expand(parts[0])
+		state.Args[name] = sprintfExpanded(state, parts[1], parts[2:])
+		state.log("&FMT: %s=%s", name, state.Args[name])
+	default:
+		return fmt.Errorf("unsupported FMT modifier: %s", inst.Symbol)
+	}
+	return nil
+}
+
+func executePlugin(state *BuildState, args string) error {
+	parts, err := splitArgs(args)
+	if err != nil {
+		return err
+	}
+	if len(parts) == 0 {
+		return fmt.Errorf("JET requires a plugin name")
+	}
+	pluginName := state.expand(parts[0])
+	pluginPath := pluginName
+	if !filepath.IsAbs(pluginPath) && filepath.Base(pluginPath) == pluginPath {
+		pluginPath = filepath.Join("plugins", pluginPath)
+	}
+	pluginPath = state.resolvePath(pluginPath)
+	cmd := exec.CommandContext(state.Context, pluginPath, parts[1:]...)
+	cmd.Dir = state.WorkDir
+	cmd.Env = state.commandEnv()
+	output, err := cmd.CombinedOutput()
+	if len(output) > 0 {
+		state.log("JET %s: %s", pluginName, strings.TrimRight(string(output), "\r\n"))
+	}
+	if err != nil {
+		return fmt.Errorf("plugin %s failed: %w", pluginName, err)
+	}
+	return nil
+}
+
+func parseAssignment(args string, directive string) (string, string, error) {
+	parts := strings.SplitN(args, "=", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid %s format, expected KEY=value", directive)
+	}
+	key := strings.TrimSpace(parts[0])
+	value := strings.TrimSpace(parts[1])
+	if key == "" || strings.ContainsAny(key, " \t\r\n") {
+		return "", "", fmt.Errorf("invalid %s key: %s", directive, key)
+	}
+	return key, value, nil
+}
+
+func splitArgs(args string) ([]string, error) {
+	parts, err := shlex.Split(args)
+	if err != nil {
+		return nil, fmt.Errorf("invalid quoted arguments: %w", err)
+	}
+	return parts, nil
+}
+
+func (state *BuildState) singlePath(args string, directive string) (string, error) {
+	parts, err := splitArgs(args)
+	if err != nil {
+		return "", err
+	}
+	if len(parts) != 1 {
+		return "", fmt.Errorf("%s requires exactly one path argument", directive)
+	}
+	return state.resolvePath(state.expand(parts[0])), nil
+}
+
+func (state *BuildState) resolvePath(path string) string {
+	path = strings.TrimSpace(path)
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(filepath.Join(state.WorkDir, path))
+}
+
+func (state *BuildState) commandEnv() []string {
+	env := os.Environ()
+	for key, value := range state.Env {
+		env = append(env, fmt.Sprintf("%s=%s", key, value))
+	}
+	return env
+}
+
+func (state *BuildState) log(format string, v ...interface{}) {
+	sendResult(state.Context, state.ResultChan, fmt.Sprintf(format, v...))
+}
+
+func (state *BuildState) expand(value string) string {
+	return os.Expand(value, func(key string) string {
+		if arg, ok := state.Args[key]; ok {
+			return arg
+		}
+		if env, ok := state.Env[key]; ok {
+			return env
+		}
+		return "$" + key
+	})
+}
+
+func shellCommand(ctx context.Context, script string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		if shell, err := exec.LookPath("sh"); err == nil {
+			return exec.CommandContext(ctx, shell, "-c", script)
+		}
+		return exec.CommandContext(ctx, "cmd", "/C", script)
+	}
+	return exec.CommandContext(ctx, "sh", "-c", script)
+}
+
+func sprintfExpanded(state *BuildState, format string, values []string) string {
+	expanded := make([]interface{}, len(values))
+	for i, value := range values {
+		expanded[i] = state.expand(value)
+	}
+	return fmt.Sprintf(format, expanded...)
+}
+
+func parseImageReference(image string) (BoxInfo, error) {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return BoxInfo{}, fmt.Errorf("image reference is required")
+	}
+	lastSlash := strings.LastIndex(image, "/")
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon > lastSlash {
+		return BoxInfo{Repository: image[:lastColon], Tag: image[lastColon+1:]}, nil
+	}
+	return BoxInfo{Repository: image, Tag: "latest"}, nil
+}
+
+func execInContainer(ctx context.Context, command string, env map[string]string, box BoxInfo) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	pool, err := dockertest.NewPool("")
+	if err != nil {
+		return "", fmt.Errorf("could not connect to docker: %w", err)
+	}
+	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
+		Repository: box.Repository,
+		Tag:        box.Tag,
+		Name:       fmt.Sprintf("jetty-%d", time.Now().UnixNano()),
+		Cmd:        []string{"tail", "-f", "/dev/null"},
+		Env:        formatEnv(env),
+	})
+	if err != nil {
+		return "", fmt.Errorf("could not start container %s:%s: %w", box.Repository, box.Tag, err)
+	}
+	defer func() {
+		if err := pool.Purge(resource); err != nil {
+			logger.Printf("Warning: failed to purge container: %v", err)
+		}
+	}()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode, err := resource.Exec([]string{"/bin/sh", "-c", command}, dockertest.ExecOptions{
+		Env:    formatEnv(env),
+		StdOut: &stdout,
+		StdErr: &stderr,
+	})
+	output := stdout.String() + stderr.String()
+	if err != nil {
+		return output, fmt.Errorf("container command failed: %w", err)
+	}
+	if exitCode != 0 {
+		return output, fmt.Errorf("container command exited with status %d", exitCode)
+	}
+	return output, ctx.Err()
+}
+
+func formatEnv(env map[string]string) []string {
+	envSlice := make([]string, 0, len(env))
+	for k, v := range env {
+		envSlice = append(envSlice, fmt.Sprintf("%s=%s", k, v))
+	}
+	return envSlice
 }
