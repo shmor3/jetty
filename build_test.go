@@ -255,6 +255,52 @@ func TestBuildStatusIsPersistedAndFilterable(t *testing.T) {
 	}
 }
 
+func TestStatusCommandShowsCompletedBuildsByDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	buildFile := filepath.Join(dir, "Jettyfile")
+	if err := os.WriteFile(buildFile, []byte("DIR out\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runBuildForTest(t, buildFile); err != nil {
+		t.Fatalf("build returned error: %v", err)
+	}
+
+	output := captureLoggerOutput(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handleSubcommands(ctx, []string{"status"}); err != nil {
+		t.Fatalf("status returned error: %v", err)
+	}
+
+	statusOutput := output.String()
+	if !strings.Contains(statusOutput, "ID") || !strings.Contains(statusOutput, statusCompleted) || !strings.Contains(statusOutput, buildFile) {
+		t.Fatalf("expected status history output, got %q", statusOutput)
+	}
+}
+
+func TestDefaultCommandShowsStatusHistory(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	buildFile := filepath.Join(dir, "Jettyfile")
+	if err := os.WriteFile(buildFile, []byte("DIR out\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runBuildForTest(t, buildFile); err != nil {
+		t.Fatalf("build returned error: %v", err)
+	}
+
+	output := captureLoggerOutput(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handleSubcommands(ctx, nil); err != nil {
+		t.Fatalf("default command returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), statusCompleted) {
+		t.Fatalf("expected default command to show status history, got %q", output.String())
+	}
+}
+
 func TestHandleBuildCommandPreservesFileFlag(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
@@ -302,6 +348,28 @@ func TestPSCommandDoesNotBlockWithoutBuilds(t *testing.T) {
 	}
 }
 
+func TestPSCommandGuidesToStatusWhenOnlyCompletedBuildsExist(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	buildFile := filepath.Join(dir, "Jettyfile")
+	if err := os.WriteFile(buildFile, []byte("DIR out\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runBuildForTest(t, buildFile); err != nil {
+		t.Fatalf("build returned error: %v", err)
+	}
+
+	output := captureLoggerOutput(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handleSubcommands(ctx, []string{"ps"}); err != nil {
+		t.Fatalf("ps returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "jetty status") {
+		t.Fatalf("expected ps to guide to status history, got %q", output.String())
+	}
+}
+
 func TestPSCommandRejectsPositionalArguments(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
@@ -317,18 +385,26 @@ func TestPSCommandRejectsPositionalArguments(t *testing.T) {
 }
 
 func TestGlobalHelpUsesCustomUsage(t *testing.T) {
+	output := captureLoggerOutput(t)
+
+	customUsage()
+
+	if !strings.Contains(output.String(), "Commands:") ||
+		!strings.Contains(output.String(), "build") ||
+		!strings.Contains(output.String(), "status") {
+		t.Fatalf("expected custom usage to include commands, got %q", output.String())
+	}
+}
+
+func captureLoggerOutput(t *testing.T) *bytes.Buffer {
+	t.Helper()
 	var output bytes.Buffer
 	previousLogger := logger
 	logger = log.New(&output, "", 0)
 	t.Cleanup(func() {
 		logger = previousLogger
 	})
-
-	customUsage()
-
-	if !strings.Contains(output.String(), "Commands:") || !strings.Contains(output.String(), "build") {
-		t.Fatalf("expected custom usage to include commands, got %q", output.String())
-	}
+	return &output
 }
 
 func runBuildForTest(t *testing.T, fileName string) ([]string, []BuildInfo, error) {

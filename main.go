@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	defaultCommand  = "ps"
+	defaultCommand  = "status"
 	defaultTimeout  = 10 * time.Minute
 	version         = "1.0.0"
 	ErrInvalidInput = errors.New("invalid input")
@@ -133,16 +133,7 @@ func handleSubcommands(ctx context.Context, args []string) error {
 	}
 	cmdCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- cmd.Run(cmdCtx, filteredArgs[1:])
-	}()
-	select {
-	case <-cmdCtx.Done():
-		return cmdCtx.Err()
-	case err := <-errChan:
-		return err
-	}
+	return cmd.Run(cmdCtx, filteredArgs[1:])
 }
 
 func showCommandHelp(cmdName string) error {

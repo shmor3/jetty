@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 )
 
@@ -41,56 +42,30 @@ func registeredCommands() {
 	})
 	registerCommand("ps", Command{
 		Name:        "ps",
-		Description: "View build status history",
+		Description: "View active builds",
 		Usage:       "ps [-a] [-f filter]",
-		Run: func(ctx context.Context, args []string) error {
-			fs := flag.NewFlagSet("ps", flag.ContinueOnError)
-			fs.SetOutput(os.Stderr)
-			allFlag := fs.Bool("a", false, "Show all builds instead of only active builds")
-			filterFlag := fs.String("f", "", "Filter builds, e.g. id=buildid, status=Failed, worker=local, file=Jettyfile")
-			if err := fs.Parse(args); err != nil {
-				return err
-			}
-			if fs.NArg() != 0 {
-				return fmt.Errorf("%w: ps does not accept positional arguments: %s", ErrInvalidInput, strings.Join(fs.Args(), " "))
-			}
-			builds, err := readBuildInfos()
-			if err != nil {
-				return fmt.Errorf("failed to read build status: %w", err)
-			}
-			builds = filterBuildInfos(builds, *allFlag, *filterFlag)
-			if len(builds) == 0 {
-				if *allFlag {
-					logger.Println("No builds found.")
-				} else {
-					logger.Println("No active builds found.")
-				}
-				return nil
-			}
-			sort.Slice(builds, func(i, j int) bool {
-				return builds[i].StartTime.After(builds[j].StartTime)
-			})
-			for _, info := range builds {
-				end := "-"
-				if !info.EndTime.IsZero() {
-					end = info.EndTime.Format(time.RFC3339)
-				}
-				logger.Printf("%s\t%s\t%s\t%s\t%s\t%s",
-					info.ID,
-					info.Status,
-					info.WorkerNode,
-					info.StartTime.Format(time.RFC3339),
-					end,
-					info.FileName,
-				)
-			}
-			return nil
-		},
-		MinArgs: 0,
-		MaxArgs: 3,
+		Run:         runStatusCommand("ps", false),
+		MinArgs:     0,
+		MaxArgs:     3,
 		Flags: func() *flag.FlagSet {
 			fs := flag.NewFlagSet("ps", flag.ContinueOnError)
-			fs.Bool("a", false, "Show all builds instead of only active builds")
+			fs.Bool("a", false, "Show all builds")
+			fs.Bool("active", false, "Show only active builds")
+			fs.String("f", "", "Filter builds")
+			return fs
+		}(),
+	})
+	registerCommand("status", Command{
+		Name:        "status",
+		Description: "View build status history",
+		Usage:       "status [--active] [-f filter]",
+		Run:         runStatusCommand("status", true),
+		MinArgs:     0,
+		MaxArgs:     3,
+		Flags: func() *flag.FlagSet {
+			fs := flag.NewFlagSet("status", flag.ContinueOnError)
+			fs.Bool("a", false, "Show all builds")
+			fs.Bool("active", false, "Show only active builds")
 			fs.String("f", "", "Filter builds")
 			return fs
 		}(),
@@ -173,6 +148,80 @@ func registeredCommands() {
 			return fs
 		}(),
 	})
+}
+
+func runStatusCommand(name string, defaultAll bool) func(context.Context, []string) error {
+	return func(ctx context.Context, args []string) error {
+		fs := flag.NewFlagSet(name, flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		allFlag := fs.Bool("a", false, "Show all builds")
+		activeFlag := fs.Bool("active", false, "Show only active builds")
+		filterFlag := fs.String("f", "", "Filter builds, e.g. id=buildid, status=Failed, worker=local, file=Jettyfile")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return fmt.Errorf("%w: %s does not accept positional arguments: %s", ErrInvalidInput, name, strings.Join(fs.Args(), " "))
+		}
+
+		showAll := defaultAll || *allFlag
+		if *activeFlag {
+			showAll = false
+		}
+		builds, err := readBuildInfos()
+		if err != nil {
+			return fmt.Errorf("failed to read build status: %w", err)
+		}
+		filtered := filterBuildInfos(builds, showAll, *filterFlag)
+		if len(filtered) == 0 {
+			printEmptyStatusMessage(name, showAll, len(builds) > 0)
+			return nil
+		}
+		sortBuildInfos(filtered)
+		printBuildInfos(filtered)
+		return nil
+	}
+}
+
+func printEmptyStatusMessage(command string, showAll bool, hasHistory bool) {
+	if showAll {
+		logger.Println("No builds found.")
+		return
+	}
+	if hasHistory {
+		logger.Printf("No active builds found. Use `jetty %s -a` or `jetty status` to show completed builds.", command)
+		return
+	}
+	logger.Println("No active builds found.")
+}
+
+func sortBuildInfos(builds []BuildInfo) {
+	sort.Slice(builds, func(i, j int) bool {
+		return builds[i].StartTime.After(builds[j].StartTime)
+	})
+}
+
+func printBuildInfos(builds []BuildInfo) {
+	writer := tabwriter.NewWriter(logger.Writer(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "ID\tSTATUS\tWORKER\tSTART\tEND\tFILE\tERROR")
+	for _, info := range builds {
+		end := "-"
+		if !info.EndTime.IsZero() {
+			end = info.EndTime.Format(time.RFC3339)
+		}
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			info.ID,
+			info.Status,
+			info.WorkerNode,
+			info.StartTime.Format(time.RFC3339),
+			end,
+			info.FileName,
+			info.Error,
+		)
+	}
+	if err := writer.Flush(); err != nil {
+		logger.Printf("Warning: failed to render build status: %v", err)
+	}
 }
 
 func filterBuildInfos(builds []BuildInfo, all bool, filter string) []BuildInfo {
