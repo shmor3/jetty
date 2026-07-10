@@ -20,7 +20,6 @@ const (
 )
 
 var (
-	workerPoolOnce sync.Once
 	statusStoreMu  sync.Mutex
 	ErrBuildFailed = errors.New("build failed")
 )
@@ -33,12 +32,6 @@ type BuildInfo struct {
 	WorkerNode string    `json:"worker_node"`
 	FileName   string    `json:"file_name,omitempty"`
 	Error      string    `json:"error,omitempty"`
-}
-
-type WorkerNode struct {
-	ID   string
-	Jobs chan Job
-	quit chan struct{}
 }
 
 type Instruction struct {
@@ -71,54 +64,12 @@ type BuildState struct {
 	Boxes      map[string]BoxInfo
 	DefaultBox string
 	ResultChan chan<- string
+	Cancel     context.CancelFunc
 }
 
 type BoxInfo struct {
 	Repository string
 	Tag        string
-}
-
-func initializeGlobalWorkerPool(numWorkers int) {
-	workerPoolOnce.Do(func() {
-		createWorkerPool(numWorkers)
-	})
-}
-
-func createWorkerPool(numWorkers int) []*WorkerNode {
-	workers := make([]*WorkerNode, numWorkers)
-	for i := 0; i < numWorkers; i++ {
-		workers[i] = NewWorkerNode(fmt.Sprintf("worker-%d", i+1))
-		workers[i].Start()
-	}
-	return workers
-}
-
-func NewWorkerNode(id string) *WorkerNode {
-	return &WorkerNode{
-		ID:   id,
-		Jobs: make(chan Job),
-		quit: make(chan struct{}),
-	}
-}
-
-func (w *WorkerNode) Start() {
-	go func() {
-		for {
-			select {
-			case job, ok := <-w.Jobs:
-				if !ok {
-					return
-				}
-				_ = processBuild(job)
-			case <-w.quit:
-				return
-			}
-		}
-	}()
-}
-
-func (w *WorkerNode) Stop() {
-	close(w.quit)
 }
 
 func build(ctx context.Context, fileName string, buildID string, workerNode string, resultChan chan<- string, buildInfoChan chan<- BuildInfo) error {
@@ -147,6 +98,11 @@ func processBuild(job Job) error {
 	}
 	if job.WorkerNode == "" {
 		job.WorkerNode = "local"
+	}
+	if job.FileName == "" {
+		buildErr := errors.New("please provide a file name")
+		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
+		return fmt.Errorf("%w: %v", ErrBuildFailed, buildErr)
 	}
 
 	absFileName, err := filepath.Abs(job.FileName)
@@ -186,8 +142,10 @@ func processBuild(job Job) error {
 		return fmt.Errorf("%w: %v", ErrBuildFailed, buildErr)
 	}
 
+	execCtx, cancel := context.WithCancel(job.Context)
+	defer cancel()
 	state := &BuildState{
-		Context:    job.Context,
+		Context:    execCtx,
 		FileName:   absFileName,
 		BaseDir:    filepath.Dir(absFileName),
 		WorkDir:    filepath.Dir(absFileName),
@@ -197,10 +155,10 @@ func processBuild(job Job) error {
 		Env:        cloneStringMap(job.InitialEnv),
 		Boxes:      make(map[string]BoxInfo),
 		ResultChan: job.ResultChan,
+		Cancel:     cancel,
 	}
 	state.Args["BUILD_ID"] = job.BuildID
 	state.Args["WORKER_NODE"] = job.WorkerNode
-
 	if err := executeInstructions(state, instructions); err != nil {
 		buildErr = err
 		sendResult(job.Context, job.ResultChan, "Error: "+err.Error())
@@ -213,14 +171,18 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(instructions))
 	var cmdInstruction *Instruction
+	var syncErr error
 
 	for i, inst := range instructions {
 		if err := state.Context.Err(); err != nil {
-			return err
+			syncErr = err
+			break
 		}
 		if inst.Directive == "CMD" {
 			if cmdInstruction != nil {
-				return fmt.Errorf("line %d: multiple CMD directives are not allowed", inst.Line)
+				syncErr = fmt.Errorf("line %d: multiple CMD directives are not allowed", inst.Line)
+				state.cancel()
+				break
 			}
 			cmdCopy := inst
 			cmdInstruction = &cmdCopy
@@ -241,7 +203,9 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 		}
 
 		if err := executeInstruction(state, inst); err != nil {
-			return fmt.Errorf("(%d/%d) line %d: %w", count, len(instructions), inst.Line, err)
+			syncErr = fmt.Errorf("(%d/%d) line %d: %w", count, len(instructions), inst.Line, err)
+			state.cancel()
+			break
 		}
 	}
 
@@ -250,6 +214,12 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 	var asyncErrors []error
 	for err := range errChan {
 		asyncErrors = append(asyncErrors, err)
+	}
+	if syncErr != nil {
+		if len(asyncErrors) > 0 {
+			return errors.Join(append([]error{syncErr}, asyncErrors...)...)
+		}
+		return syncErr
 	}
 	if len(asyncErrors) > 0 {
 		return errors.Join(asyncErrors...)
@@ -315,6 +285,13 @@ func (state *BuildState) snapshot() *BuildState {
 		Boxes:      cloneBoxMap(state.Boxes),
 		DefaultBox: state.DefaultBox,
 		ResultChan: state.ResultChan,
+		Cancel:     state.Cancel,
+	}
+}
+
+func (state *BuildState) cancel() {
+	if state.Cancel != nil {
+		state.Cancel()
 	}
 }
 
@@ -382,8 +359,17 @@ func writeBuildInfosLocked(builds []BuildInfo) error {
 	if err != nil {
 		return err
 	}
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, append(data, '\n'), 0644); err != nil {
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), "builds-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmpFile.Write(append(data, '\n')); err != nil {
+		tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, path)

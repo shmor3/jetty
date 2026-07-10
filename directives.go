@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -133,6 +134,9 @@ func executeCopy(state *BuildState, args string) error {
 		return fmt.Errorf("source does not exist: %s", src)
 	}
 	if srcInfo.IsDir() {
+		if isSubpath(src, dst) {
+			return fmt.Errorf("cannot copy directory %s into itself at %s", src, dst)
+		}
 		err = copyDir(src, dst)
 	} else {
 		err = copyFile(src, dst)
@@ -278,6 +282,9 @@ func executeFormat(state *BuildState, inst Instruction) error {
 			return fmt.Errorf("$FMT requires an environment variable and format string")
 		}
 		name := state.expand(parts[0])
+		if !isValidName(name) {
+			return fmt.Errorf("invalid environment variable name: %s", name)
+		}
 		state.Env[name] = sprintfExpanded(state, parts[1], parts[2:])
 		state.log("$FMT: %s=%s", name, state.Env[name])
 	case "&":
@@ -285,6 +292,9 @@ func executeFormat(state *BuildState, inst Instruction) error {
 			return fmt.Errorf("&FMT requires an argument name and format string")
 		}
 		name := state.expand(parts[0])
+		if !isValidName(name) {
+			return fmt.Errorf("invalid argument name: %s", name)
+		}
 		state.Args[name] = sprintfExpanded(state, parts[1], parts[2:])
 		state.log("&FMT: %s=%s", name, state.Args[name])
 	default:
@@ -307,7 +317,11 @@ func executePlugin(state *BuildState, args string) error {
 		pluginPath = filepath.Join("plugins", pluginPath)
 	}
 	pluginPath = state.resolvePath(pluginPath)
-	cmd := exec.CommandContext(state.Context, pluginPath, parts[1:]...)
+	pluginArgs := make([]string, 0, len(parts)-1)
+	for _, arg := range parts[1:] {
+		pluginArgs = append(pluginArgs, state.expand(arg))
+	}
+	cmd := exec.CommandContext(state.Context, pluginPath, pluginArgs...)
 	cmd.Dir = state.WorkDir
 	cmd.Env = state.commandEnv()
 	output, err := cmd.CombinedOutput()
@@ -327,10 +341,16 @@ func parseAssignment(args string, directive string) (string, string, error) {
 	}
 	key := strings.TrimSpace(parts[0])
 	value := strings.TrimSpace(parts[1])
-	if key == "" || strings.ContainsAny(key, " \t\r\n") {
+	if !isValidName(key) {
 		return "", "", fmt.Errorf("invalid %s key: %s", directive, key)
 	}
 	return key, value, nil
+}
+
+var validNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func isValidName(name string) bool {
+	return validNamePattern.MatchString(name)
 }
 
 func splitArgs(args string) ([]string, error) {
@@ -350,6 +370,27 @@ func (state *BuildState) singlePath(args string, directive string) (string, erro
 		return "", fmt.Errorf("%s requires exactly one path argument", directive)
 	}
 	return state.resolvePath(state.expand(parts[0])), nil
+}
+
+func isSubpath(parent string, child string) bool {
+	parentAbs, err := filepath.Abs(parent)
+	if err != nil {
+		return false
+	}
+	childAbs, err := filepath.Abs(child)
+	if err != nil {
+		return false
+	}
+	parentAbs = filepath.Clean(parentAbs)
+	childAbs = filepath.Clean(childAbs)
+	if parentAbs == childAbs {
+		return true
+	}
+	rel, err := filepath.Rel(parentAbs, childAbs)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func (state *BuildState) resolvePath(path string) string {

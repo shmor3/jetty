@@ -105,14 +105,6 @@ func parseDirectiveToken(token string) (string, string, error) {
 	return directive, symbol, nil
 }
 
-func expandArgs(s string, args map[string]string) string {
-	return os.Expand(s, func(k string) string {
-		if v, ok := args[k]; ok {
-			return v
-		}
-		return "$" + k
-	})
-}
 func parseFlags() (*Config, error) {
 	config := &Config{}
 	args := os.Args[1:]

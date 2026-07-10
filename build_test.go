@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +81,57 @@ func TestBuildWaitsForAsyncCopyBeforeCMD(t *testing.T) {
 	assertFileContent(t, filepath.Join(dir, "out", "copied.txt"), "copied")
 }
 
+func TestBuildCancelsAsyncWorkBeforeReturningOnSyncFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("sh"); err != nil {
+			t.Skip("requires sh for portable sleep command")
+		}
+	}
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	buildFile := filepath.Join(dir, "Jettyfile")
+	content := strings.Join([]string{
+		"*RUN sleep 5",
+		"RUN exit 9",
+		"",
+	}, "\n")
+	if err := os.WriteFile(buildFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	_, infos, err := runBuildForTest(t, buildFile)
+	if err == nil {
+		t.Fatal("expected build to fail")
+	}
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Fatalf("expected async work to be cancelled promptly, took %s", elapsed)
+	}
+	if len(infos) == 0 || infos[len(infos)-1].Status != statusFailed {
+		t.Fatalf("expected final build status Failed, got %#v", infos)
+	}
+}
+
+func TestCopyRejectsDirectoryIntoItself(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	if err := os.Mkdir(filepath.Join(dir, "source"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	buildFile := filepath.Join(dir, "Jettyfile")
+	if err := os.WriteFile(buildFile, []byte("CPY source source/nested\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := runBuildForTest(t, buildFile)
+	if err == nil {
+		t.Fatal("expected recursive copy to fail")
+	}
+	if !strings.Contains(err.Error(), "cannot copy directory") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestFormatCanSetArgsAndEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
@@ -103,6 +158,55 @@ func TestFormatCanSetArgsAndEnvironment(t *testing.T) {
 	if !joinedOutputContains(output, "CMD: env-value") {
 		t.Fatalf("expected CMD to see formatted environment variable, got %q", output)
 	}
+}
+
+func TestFormatRejectsInvalidVariableNames(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	buildFile := filepath.Join(dir, "Jettyfile")
+	if err := os.WriteFile(buildFile, []byte("&FMT 1BAD \"%s\" value\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := runBuildForTest(t, buildFile)
+	if err == nil {
+		t.Fatal("expected invalid argument name to fail")
+	}
+	if !strings.Contains(err.Error(), "invalid argument name") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPluginArgumentsAreExpanded(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("plugin execution bit behavior is platform-specific")
+	}
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	pluginsDir := filepath.Join(dir, "plugins")
+	if err := os.Mkdir(pluginsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	pluginPath := filepath.Join(pluginsDir, "capture")
+	plugin := "#!/bin/sh\nprintf '%s' \"$1\" > plugin-output.txt\n"
+	if err := os.WriteFile(pluginPath, []byte(plugin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	buildFile := filepath.Join(dir, "Jettyfile")
+	content := strings.Join([]string{
+		"ARG VALUE=expanded",
+		"JET capture $VALUE",
+		"",
+	}, "\n")
+	if err := os.WriteFile(buildFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := runBuildForTest(t, buildFile)
+	if err != nil {
+		t.Fatalf("build returned error: %v", err)
+	}
+	assertFileContent(t, filepath.Join(dir, "plugin-output.txt"), "expanded")
 }
 
 func TestBuildFailurePropagatesErrorAndFailedStatus(t *testing.T) {
@@ -169,6 +273,25 @@ func TestHandleBuildCommandPreservesFileFlag(t *testing.T) {
 	}
 }
 
+func TestBuildCommandRejectsAmbiguousFileArguments(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	buildFile := filepath.Join(dir, "Jettyfile")
+	if err := os.WriteFile(buildFile, []byte("DIR out\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := handleSubcommands(ctx, []string{"build", "-f", buildFile, buildFile})
+	if err == nil {
+		t.Fatal("expected ambiguous build file arguments to fail")
+	}
+	if !strings.Contains(err.Error(), "too many arguments") && !strings.Contains(err.Error(), "either -f or one positional file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestPSCommandDoesNotBlockWithoutBuilds(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
@@ -176,6 +299,35 @@ func TestPSCommandDoesNotBlockWithoutBuilds(t *testing.T) {
 	defer cancel()
 	if err := handleSubcommands(ctx, []string{"ps"}); err != nil {
 		t.Fatalf("ps returned error: %v", err)
+	}
+}
+
+func TestPSCommandRejectsPositionalArguments(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := handleSubcommands(ctx, []string{"ps", "unexpected"})
+	if err == nil {
+		t.Fatal("expected ps positional argument to fail")
+	}
+	if !strings.Contains(err.Error(), "ps does not accept positional arguments") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGlobalHelpUsesCustomUsage(t *testing.T) {
+	var output bytes.Buffer
+	previousLogger := logger
+	logger = log.New(&output, "", 0)
+	t.Cleanup(func() {
+		logger = previousLogger
+	})
+
+	customUsage()
+
+	if !strings.Contains(output.String(), "Commands:") || !strings.Contains(output.String(), "build") {
+		t.Fatalf("expected custom usage to include commands, got %q", output.String())
 	}
 }
 
