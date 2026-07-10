@@ -2,7 +2,6 @@ package main
 
 import (
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 )
@@ -16,13 +15,22 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer sourceFile.Close()
+	sourceInfo, err := sourceFile.Stat()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
 	destFile, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
 	defer destFile.Close()
-	_, err = io.Copy(destFile, sourceFile)
-	return err
+	if _, err = io.Copy(destFile, sourceFile); err != nil {
+		return err
+	}
+	return os.Chmod(dst, sourceInfo.Mode())
 }
 func copyDir(src, dst string) error {
 	srcInfo, err := os.Stat(src)
@@ -33,7 +41,7 @@ func copyDir(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	entries, err := ioutil.ReadDir(src)
+	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
 	}
@@ -52,6 +60,9 @@ func copyDir(src, dst string) error {
 	return nil
 }
 func appendToFile(filename, content string) error {
+	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return err

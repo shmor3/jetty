@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -14,64 +13,98 @@ func parseFile(fileName string) ([]Instruction, error) {
 		return nil, err
 	}
 	defer file.Close()
-	validDirectives := map[string][]string{
-		"ARG": {},
-		"ENV": {},
-		"RUN": {"*"},
-		"CMD": {},
-		"DIR": {},
-		"CPY": {"*"},
-		"WDR": {},
-		"SUB": {"*"},
-		"FRM": {},
-		"JET": {},
-		"FMT": {"^", "$", "&"},
-		"BOX": {},
-		"USE": {},
-	}
 	var instructions []Instruction
 	scanner := bufio.NewScanner(file)
 	var multiLineCommand string
+	var multiLineStart int
+	lineNumber := 0
 	for scanner.Scan() {
+		lineNumber++
 		line := scanner.Text()
 		trimmedLine := strings.TrimSpace(line)
-		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "#") {
+		if multiLineCommand == "" && (trimmedLine == "" || strings.HasPrefix(trimmedLine, "#")) {
 			continue
 		}
-		if strings.HasSuffix(line, "\\") {
-			multiLineCommand += strings.TrimSuffix(line, "\\") + "\n"
+		lineWithoutTrailingSpace := strings.TrimRight(line, " \t")
+		if strings.HasSuffix(lineWithoutTrailingSpace, "\\") {
+			if multiLineCommand == "" {
+				multiLineStart = lineNumber
+			}
+			multiLineCommand += strings.TrimSuffix(lineWithoutTrailingSpace, "\\") + "\n"
 			continue
 		}
+		instructionLineNumber := lineNumber
 		if multiLineCommand != "" {
 			line = multiLineCommand + line
 			multiLineCommand = ""
+			instructionLineNumber = multiLineStart
 		}
-		parts := strings.SplitN(line, " ", 2)
+		line = strings.TrimSpace(line)
+		parts := strings.Fields(line)
 		if len(parts) < 2 {
-			return nil, fmt.Errorf("invalid instruction: %s", line)
+			return nil, fmt.Errorf("line %d: invalid instruction: %s", instructionLineNumber, line)
 		}
-		directive := parts[0]
-		prefix := ""
-		if strings.HasPrefix(directive, "*") {
-			prefix = "*"
-			directive = directive[1:]
-		}
-		if _, ok := validDirectives[directive]; !ok {
-			return nil, fmt.Errorf("invalid directive: %s", prefix+directive)
+		token := parts[0]
+		argsStart := strings.Index(line, token) + len(token)
+		directive, symbol, err := parseDirectiveToken(token)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", instructionLineNumber, err)
 		}
 		instructions = append(instructions, Instruction{
-			Directive: prefix + directive,
-			Args:      strings.TrimSpace(parts[1]),
+			Directive: directive,
+			Symbol:    symbol,
+			Args:      strings.TrimSpace(line[argsStart:]),
+			Line:      instructionLineNumber,
 		})
 	}
 	if multiLineCommand != "" {
-		return nil, fmt.Errorf("unterminated multi-line command")
+		return nil, fmt.Errorf("line %d: unterminated multi-line command", multiLineStart)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return instructions, nil
 }
+
+var directiveSymbols = map[string]map[string]bool{
+	"ARG": {"": true},
+	"ENV": {"": true},
+	"RUN": {"": true, "*": true},
+	"CMD": {"": true},
+	"DIR": {"": true},
+	"CPY": {"": true, "*": true},
+	"WDR": {"": true},
+	"SUB": {"": true, "*": true},
+	"FRM": {"": true},
+	"JET": {"": true},
+	"FMT": {"": true, "^": true, "$": true, "&": true},
+	"BOX": {"": true},
+	"USE": {"": true},
+}
+
+func parseDirectiveToken(token string) (string, string, error) {
+	if token == "" {
+		return "", "", fmt.Errorf("empty directive")
+	}
+	symbol := ""
+	directive := token
+	if strings.ContainsRune("*^$&", rune(token[0])) {
+		symbol = token[:1]
+		directive = token[1:]
+	}
+	allowedSymbols, ok := directiveSymbols[directive]
+	if !ok || directive == "" {
+		return "", "", fmt.Errorf("invalid directive: %s", token)
+	}
+	if !allowedSymbols[symbol] {
+		if symbol == "" {
+			return "", "", fmt.Errorf("directive %s requires a supported modifier", directive)
+		}
+		return "", "", fmt.Errorf("modifier %s is not supported for directive %s", symbol, directive)
+	}
+	return directive, symbol, nil
+}
+
 func expandArgs(s string, args map[string]string) string {
 	return os.Expand(s, func(k string) string {
 		if v, ok := args[k]; ok {
@@ -82,29 +115,18 @@ func expandArgs(s string, args map[string]string) string {
 }
 func parseFlags() (*Config, error) {
 	config := &Config{}
-	flag.BoolVar(&config.Help, "help", false, "Show help message")
-	flag.BoolVar(&config.Help, "h", false, "Show help message (shorthand)")
-	flag.BoolVar(&config.Verbose, "verbose", false, "Enable verbose output")
-	flag.BoolVar(&config.Verbose, "v", false, "Enable verbose output (shorthand)")
-	flag.BoolVar(&config.Version, "version", false, "Show version information")
-	flag.Usage = customUsage
 	args := os.Args[1:]
+scan:
 	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if len(arg) > 1 && arg[0] == '-' {
-			if len(arg) > 2 && arg[1] == '-' {
-				name := arg[2:]
-				if f := flag.Lookup(name); f != nil {
-					f.Value.Set("true")
-				}
-			} else {
-				name := arg[1:]
-				if f := flag.Lookup(name); f != nil {
-					f.Value.Set("true")
-				}
-			}
-		} else {
-			break
+		switch args[i] {
+		case "--help", "-h":
+			config.Help = true
+		case "--verbose", "-v":
+			config.Verbose = true
+		case "--version":
+			config.Version = true
+		default:
+			break scan
 		}
 	}
 	return config, nil

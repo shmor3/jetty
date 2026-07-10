@@ -1,141 +1,113 @@
-## jetty: A Concurrent Build System
+# Jetty
 
-jetty is a concurrent build system that processes build instructions from a file and executes them in a distributed manner using worker nodes. It's designed for efficiency, flexibility, and ease of use in complex build environments.
+Jetty is a local Jettyfile runner for small build and automation workflows. It executes shell commands, file operations, nested builds, and selected asynchronous steps while keeping build state isolated from the parent process.
+
+Jettyfiles are trusted input. `RUN`, `CMD`, `USE`, and `JET` can execute commands on the host or in Docker containers, so do not run Jettyfiles from untrusted sources.
 
 ## Features
 
--   Concurrent execution of build instructions
--   Distributed processing with a worker pool
--   Support for various build directives (ARG, ENV, RUN, CMD, DIR, CPY, WDR, SUB, FRM, BOX, USE, JET)
--   Real-time build status tracking
--   Asynchronous execution with \*RUN flag
--   Nested builds support with SUB directive
--   Docker integration for containerized builds
+- Line-oriented Jettyfile syntax with `ARG`, `ENV`, `RUN`, `CMD`, `DIR`, `CPY`, `WDR`, `SUB`, `FMT`, `FRM`, `BOX`, `USE`, and `JET`.
+- Asynchronous `*RUN`, `*CPY`, and `*SUB` steps. Jetty waits for async work before running the final `CMD`.
+- Per-build working directory and environment. `WDR` does not call `chdir` on the Jetty process.
+- Nested builds with paths resolved relative to the current Jettyfile working directory.
+- Build status snapshots in `.jetty/builds.json`, readable with `jetty ps`.
+- Optional Docker-backed execution with `FRM`/`BOX` and `USE`.
 
-## How It Works
+## Install
 
-jetty executes the build process for a given file by:
-
-1. Creating a worker pool
-2. Assigning the build to a worker
-3. Parsing and executing instructions from the file
-4. Handling concurrent execution of instructions
-5. Supporting asynchronous execution with \*RUN
-6. Allowing nested builds with SUB directive
-7. Executing the final CMD instruction if present
-
-## Jettyfile Syntax
-
-Here's an example of a `Jettyfile` showcasing various directives:
-
-```jetty
-ARG TEST_ARG='arg works'
-ENV TEST_ENV='env works'
-RUN echo 'run works'
-RUN echo $TEST_ENV
-RUN echo $TEST_ARG \
-    echo 'multiline works' \
-    echo 1 \
-    echo 2 \
-    echo 3
-*RUN sleep 5
-DIR ./test
-WDR ./test
-DIR ./itworks
-SUB ./sub-build.jetty
-CMD echo 'it works'
+```bash
+git clone https://github.com/shmor3/jetty.git
+cd jetty
+go build -o jetty .
 ```
-
-## Directives and Symbols
-
--   ARG: No specific symbols
--   ENV: No specific symbols
--   RUN: Can use "\*" symbol
--   CMD: No specific symbols
--   DIR: No specific symbols
--   CPY: Can use "\*" symbol
--   WDR: No specific symbols
--   SUB: Can use "\*" symbol
--   FRM: No specific symbols
--   JET: No specific symbols
--   FMT: Can use "^", "$", "&" symbols
--   BOX: No specific symbols
--   USE: No specific symbols
-
-### Directive-Symbol Compatibility
-
--   **RUN**, **CPY**: Can be prefixed with \* for asynchronous execution
--   **FMT**: Can use ^, $, & symbols for different formatting options
--   Other directives: Do not have currently have specific symbol modifiers
-
-## Installation
-
-1. Clone the repository:
-
-    ```bash
-    git clone https://github.com/shmor3/jetty.git
-    ```
-
-2. Build the project:
-    ```bash
-    cd jetty
-    go build .
-    ```
 
 ## Usage
 
-To see available commands:
-
 ```bash
-./jetty -h
+jetty init
+jetty build
+jetty build -f path/to/Jettyfile
+jetty ps
+jetty ps -a
+jetty ps -a -f status=Failed
 ```
 
-### Available Commands
+`jetty build` uses `Jettyfile` in the current directory unless a file is passed with `-f` or as a positional argument.
 
-1. **init**: Create a new Jettyfile in the current directory
+`jetty ps` reads `.jetty/builds.json` from the current directory by default. Set `JETTY_STATE_DIR` to write and read status from another directory.
 
-    ```bash
-    jetty init
-    ```
+## Jettyfile Example
 
-2. **ps**: View the status of builds
+```jetty
+ARG NAME=jetty
+ENV GREETING=hello
 
-    ```bash
-    jetty ps [-a] [-f filter]
-    ```
+DIR build
+^FMT build/message.txt "%s %s" $GREETING $NAME
 
-    Options:
+*RUN echo async step
+SUB sub.Jettyfile
 
-    - `-a`: Show all builds (active and completed)
-    - `-f`: Filter builds (e.g., "id=buildid")
+CMD echo finished
+```
 
-3. **build**: Run a new build
-    ```bash
-    jetty build [-f filename]
-    ```
-    Options:
-    - `-f`: Specify the build file (default: Jettyfile in current directory)
+## Directives
 
-## Getting Started
+| Directive | Description |
+| --- | --- |
+| `ARG KEY=value` | Defines a build argument. Jetty expands `$KEY` from arguments before running directives. |
+| `ENV KEY=value` | Defines an environment variable for later `RUN`, `CMD`, `USE`, and `JET` commands. |
+| `RUN command` | Runs a shell command in the current build working directory. |
+| `*RUN command` | Runs a shell command asynchronously. |
+| `CMD command` | Runs once after all other instructions and after async work completes. Only one `CMD` is allowed. |
+| `DIR path` | Creates a directory relative to the current build working directory. |
+| `WDR path` | Changes Jetty's build-local working directory for later directives. |
+| `CPY source destination` | Copies a file or directory. |
+| `*CPY source destination` | Copies a file or directory asynchronously. |
+| `SUB file` | Runs another Jettyfile synchronously. The sub-build inherits current args and environment. |
+| `*SUB file` | Runs another Jettyfile asynchronously. |
+| `FMT format args...` | Formats a string and writes it to build output. |
+| `^FMT file format args...` | Appends a formatted string to a file. |
+| `$FMT NAME format args...` | Stores a formatted string in the build environment. |
+| `&FMT NAME format args...` | Stores a formatted string in build args. |
+| `FRM image[:tag]` | Sets the default Docker image for later `USE` directives. |
+| `BOX name image[:tag]` | Defines a named Docker image. `BOX name repository tag` is also supported. |
+| `USE [box] command` | Runs a command inside a Docker box. If no box is supplied, the `FRM` default is used. |
+| `JET plugin [args...]` | Executes a plugin from `plugins/plugin` relative to the current working directory, or from an explicit path. |
 
-1. Create a `Jettyfile` in your project directory
-2. Run jetty in your project directory:
-    ```bash
-    ./jetty build
-    ```
+`RUN` and `CMD` use `sh -c` on Unix. On Windows, Jetty uses `sh -c` when `sh` is available, otherwise it falls back to `cmd /C`.
 
-## Contributing
+## Paths
 
-We welcome contributions! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) file for details on how to contribute to jetty.
+Relative paths are resolved from the directory containing the current Jettyfile. After `WDR`, relative paths resolve from the new build-local working directory. Jetty does not mutate the parent process working directory.
+
+## Status
+
+Builds write status records as JSON:
+
+```json
+[
+  {
+    "id": "1770000000000000000",
+    "status": "Completed",
+    "start_time": "2026-07-10T12:00:00Z",
+    "end_time": "2026-07-10T12:00:01Z",
+    "worker_node": "local",
+    "file_name": "/path/to/Jettyfile"
+  }
+]
+```
+
+Use `jetty ps` for active builds and `jetty ps -a` for active and completed builds. Supported filters are `id=`, `status=`, `worker=`, and `file=`.
+
+## Development
+
+```bash
+go test ./...
+go vet ./...
+gofmt -w .
+```
 
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-
-## Support
-
-If you encounter any issues or have questions, please file an issue on the GitHub issue tracker.
-
----
-
-Happy building with jetty! 🚀
