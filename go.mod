@@ -2,7 +2,10 @@ module jetty
 
 go 1.23
 
-require github.com/ory/dockertest/v3 v3.11.0
+require (
+	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
+	github.com/ory/dockertest/v3 v3.11.0
+)
 
 require (
 	dario.cat/mergo v1.0.0 // indirect
@@ -16,7 +19,6 @@ require (
 	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/term v0.5.0 // indirect

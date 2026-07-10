@@ -1,17 +1,5 @@
 # Jettyfile
 
-# Add your build instructions here
-ARG TEST_ARG='arg works'
-ENV TEST_ENV='env works'
-RUN echo 'run works'
-RUN echo $TEST_ENV
-RUN echo $TEST_ARG \
-    echo 'multiline works' \
-    echo 1 \
-    echo 2 \
-    echo 3
-*RUN sleep 15
-DIR ./test
-WDR ./test
-DIR ./itworks
-CMD echo 'final step'
+&FMT SUB_MESSAGE "%s" nested-build
+^FMT build/sub-message.txt "%s" $SUB_MESSAGE
+RUN echo sub build complete

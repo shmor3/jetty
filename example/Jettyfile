@@ -1,19 +1,12 @@
 # Jettyfile
 
-# Add your build instructions here
-SUB ./sub.Jettyfile
-ARG TEST_ARG='arg works'
-ENV TEST_ENV='env works'
-RUN echo 'run works'
-RUN echo $TEST_ENV
-RUN echo $TEST_ARG \
-    echo 'multiline works' \
-    echo 1 \
-    echo 2 \
-    echo 3
-*RUN sleep 15
-RUN sleep 15
-DIR ./test
-WDR ./test
-DIR ./itworks
-CMD echo 'final step'
+ARG NAME=jetty
+ENV GREETING=hello
+
+DIR build
+^FMT build/message.txt "%s %s" $GREETING $NAME
+
+SUB sub.Jettyfile
+*RUN echo async step
+
+CMD echo finished
