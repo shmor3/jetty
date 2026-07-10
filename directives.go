@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -423,16 +422,6 @@ func (state *BuildState) expand(value string) string {
 		}
 		return "$" + key
 	})
-}
-
-func shellCommand(ctx context.Context, script string) *exec.Cmd {
-	if runtime.GOOS == "windows" {
-		if shell, err := exec.LookPath("sh"); err == nil {
-			return exec.CommandContext(ctx, shell, "-c", script)
-		}
-		return exec.CommandContext(ctx, "cmd", "/C", script)
-	}
-	return exec.CommandContext(ctx, "sh", "-c", script)
 }
 
 func sprintfExpanded(state *BuildState, format string, values []string) string {

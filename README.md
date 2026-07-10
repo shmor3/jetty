@@ -27,14 +27,16 @@ go build -o jetty .
 jetty init
 jetty build
 jetty build -f path/to/Jettyfile
+jetty status
+jetty status --active
+jetty status -f status=Failed
 jetty ps
 jetty ps -a
-jetty ps -a -f status=Failed
 ```
 
 `jetty build` uses `Jettyfile` in the current directory unless a file is passed with `-f` or as a positional argument.
 
-`jetty ps` reads `.jetty/builds.json` from the current directory by default. Set `JETTY_STATE_DIR` to write and read status from another directory.
+`jetty status` reads `.jetty/builds.json` from the current directory by default and shows recorded build history. `jetty ps` shows active builds by default; use `jetty ps -a` for history. Set `JETTY_STATE_DIR` to write and read status from another directory.
 
 ## Jettyfile Example
 
@@ -100,7 +102,7 @@ Builds write status records as JSON:
 ]
 ```
 
-Use `jetty ps` for active builds and `jetty ps -a` for active and completed builds. Supported filters are `id=`, `status=`, `worker=`, and `file=`.
+Use `jetty status` for build history, `jetty status --active` or `jetty ps` for active builds, and `jetty ps -a` for active and completed builds. Supported filters are `id=`, `status=`, `worker=`, and `file=`.
 
 ## Development
 
