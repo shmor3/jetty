@@ -13,6 +13,31 @@ import (
 )
 
 func registeredCommands() {
+	registerCommand("help", Command{
+		Name:        "help",
+		Description: "Show help for a command",
+		Usage:       "help [command]",
+		Run: func(ctx context.Context, args []string) error {
+			if len(args) == 0 {
+				customUsage()
+				return nil
+			}
+			return showCommandHelp(args[0])
+		},
+		MinArgs: 0,
+		MaxArgs: 1,
+	})
+	registerCommand("version", Command{
+		Name:        "version",
+		Description: "Show version information",
+		Usage:       "version",
+		Run: func(ctx context.Context, args []string) error {
+			logger.Printf("Jetty version %s\n", version)
+			return nil
+		},
+		MinArgs: 0,
+		MaxArgs: 0,
+	})
 	registerCommand("init", Command{
 		Name:        "init",
 		Description: "Create a new Jettyfile in the current directory",
@@ -209,14 +234,30 @@ func printBuildInfos(builds []BuildInfo) {
 		if !info.EndTime.IsZero() {
 			end = info.EndTime.Format(time.RFC3339)
 		}
+		
+		idStr := info.ID
+		if len(idStr) > 25 {
+			idStr = "..." + idStr[len(idStr)-22:]
+		}
+		
+		errStr := info.Error
+		if len(errStr) > 50 {
+			errStr = errStr[:47] + "..."
+		}
+		
+		fileName := info.FileName
+		if len(fileName) > 35 {
+			fileName = "..." + fileName[len(fileName)-32:]
+		}
+
 		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			info.ID,
+			idStr,
 			info.Status,
 			info.WorkerNode,
 			info.StartTime.Format(time.RFC3339),
 			end,
-			info.FileName,
-			info.Error,
+			fileName,
+			errStr,
 		)
 	}
 	if err := writer.Flush(); err != nil {
