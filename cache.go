@@ -30,19 +30,10 @@ func cacheStorePath() string {
 }
 
 func lockCacheStore() (func(), error) {
-	lockedInMem := cacheStoreMu.TryLock()
-	if !lockedInMem {
-		for i := 0; i < 50; i++ {
-			lockedInMem = cacheStoreMu.TryLock()
-			if lockedInMem {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if !lockedInMem {
-			return nil, fmt.Errorf("timeout waiting for in-memory cache lock")
-		}
-	}
+	// Block on the in-process mutex rather than spin-with-timeout: concurrent
+	// async workers should wait their turn, not fail a correct build with a
+	// spurious timeout. The cross-process flock below keeps its bounded wait.
+	cacheStoreMu.Lock()
 
 	lockPath := cacheStorePath() + ".lock"
 	stateDir := filepath.Dir(lockPath)
@@ -124,7 +115,11 @@ func hashFiles(workDir string, patterns []string) (string, error) {
 
 	var files []string
 	for _, pattern := range patterns {
-		matches, err := filepath.Glob(filepath.Join(workDir, pattern))
+		globPattern := pattern
+		if !filepath.IsAbs(globPattern) {
+			globPattern = filepath.Join(workDir, pattern)
+		}
+		matches, err := filepath.Glob(globPattern)
 		if err != nil {
 			return "", err
 		}
