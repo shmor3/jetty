@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -33,6 +34,24 @@ func registeredCommands() {
 		Usage:       "version",
 		Run: func(ctx context.Context, args []string) error {
 			logger.Printf("Jetty version %s\n", version)
+			return nil
+		},
+		MinArgs: 0,
+		MaxArgs: 0,
+	})
+	registerCommand("clean", Command{
+		Name:        "clean",
+		Description: "Clear all status history and temporary state",
+		Usage:       "clean",
+		Run: func(ctx context.Context, args []string) error {
+			if len(args) != 0 {
+				return fmt.Errorf("%w: clean does not accept arguments", ErrInvalidInput)
+			}
+			stateDir := filepath.Dir(statusStorePath())
+			if err := os.RemoveAll(stateDir); err != nil {
+				return fmt.Errorf("failed to clean state directory: %w", err)
+			}
+			logger.Println("Successfully cleaned state directory")
 			return nil
 		},
 		MinArgs: 0,

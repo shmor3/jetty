@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -169,7 +171,11 @@ func processBuild(job Job) error {
 	}
 	state.Args["BUILD_ID"] = job.BuildID
 	state.Args["WORKER_NODE"] = job.WorkerNode
+
+	loadEnvFile(state, filepath.Join(state.BaseDir, ".env"))
+
 	if err := executeInstructions(state, instructions); err != nil {
+		state.cancel()
 		buildErr = err
 		sendResult(job.Context, job.ResultChan, "Error: "+err.Error())
 		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
@@ -423,4 +429,23 @@ func writeBuildInfosLocked(builds []BuildInfo) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+func loadEnvFile(state *BuildState, filename string) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			state.Env[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
 }
