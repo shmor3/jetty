@@ -22,10 +22,20 @@ const (
 	statusFailed    = "Failed"
 
 	jettyStateDirEnv = "JETTY_STATE_DIR"
+
+	// maxSubBuildDepth caps how deeply SUB directives may nest.
+	maxSubBuildDepth = 50
+	// maxStoredBuilds caps how many build records are retained on disk.
+	maxStoredBuilds = 1000
+	// lockRetries and lockRetryInterval bound how long we wait to acquire the
+	// status-store lock (lockRetries * lockRetryInterval total).
+	lockRetries       = 50
+	lockRetryInterval = 100 * time.Millisecond
 )
 
 var (
-	statusStoreMu  sync.Mutex
+	statusStoreMu sync.Mutex
+	// ErrBuildFailed wraps any error that caused a build to fail.
 	ErrBuildFailed = errors.New("build failed")
 	asyncSemaphore chan struct{}
 )
@@ -34,6 +44,7 @@ func init() {
 	asyncSemaphore = make(chan struct{}, runtime.NumCPU())
 }
 
+// BuildInfo is the persisted status record for a single build.
 type BuildInfo struct {
 	ID         string    `json:"id"`
 	Status     string    `json:"status"`
@@ -44,6 +55,7 @@ type BuildInfo struct {
 	Error      string    `json:"error,omitempty"`
 }
 
+// Instruction is a single parsed directive from a Jettyfile.
 type Instruction struct {
 	Directive string
 	Symbol    string
@@ -51,6 +63,7 @@ type Instruction struct {
 	Line      int
 }
 
+// Job describes a build to run, including its I/O channels and inherited state.
 type Job struct {
 	BuildID       string
 	FileName      string
@@ -64,6 +77,7 @@ type Job struct {
 	Depth         int
 }
 
+// BuildState holds the mutable execution context for a running build.
 type BuildState struct {
 	Context    context.Context
 	FileName   string
@@ -80,6 +94,7 @@ type BuildState struct {
 	Depth      int
 }
 
+// BoxInfo identifies a Docker image (repository and tag) for USE/FRM/BOX.
 type BoxInfo struct {
 	Repository string
 	Tag        string
@@ -97,7 +112,7 @@ func build(ctx context.Context, fileName string, buildID string, workerNode stri
 	})
 }
 
-func processBuild(job Job) error {
+func processBuild(job Job) (err error) {
 	if job.ResultChan != nil {
 		defer close(job.ResultChan)
 	}
@@ -118,7 +133,7 @@ func processBuild(job Job) error {
 		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
 	}
-	if job.Depth > 50 {
+	if job.Depth > maxSubBuildDepth {
 		buildErr := errors.New("maximum sub-build depth exceeded")
 		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
@@ -139,9 +154,13 @@ func processBuild(job Job) error {
 
 	var buildErr error
 	defer func() {
-		r := recover()
-		if r != nil {
+		if r := recover(); r != nil {
+			// Convert a panic into a Failed build and a returned error rather
+			// than re-panicking, which would crash the whole CLI instead of
+			// reporting the failure cleanly.
 			buildErr = fmt.Errorf("panic: %v", r)
+			err = fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
+			sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 		}
 		buildInfo.EndTime = time.Now()
 		if buildErr != nil {
@@ -151,9 +170,6 @@ func processBuild(job Job) error {
 			buildInfo.Status = statusCompleted
 		}
 		publishBuildInfo(job.Context, job.BuildInfoChan, buildInfo)
-		if r != nil {
-			panic(r)
-		}
 	}()
 
 	instructions, err := parseFile(absFileName)
@@ -183,9 +199,19 @@ func processBuild(job Job) error {
 	state.Args["WORKER_NODE"] = job.WorkerNode
 
 	if job.EnvFile != "" {
-		loadEnvFile(state, job.EnvFile)
+		// An explicitly requested env file must exist and be readable.
+		if envErr := loadEnvFile(state, job.EnvFile); envErr != nil {
+			buildErr = fmt.Errorf("failed to load env file %s: %w", job.EnvFile, envErr)
+			sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
+			return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
+		}
 	} else {
-		loadEnvFile(state, filepath.Join(state.BaseDir, ".env"))
+		// The implicit .env is optional; only a real read error is fatal.
+		if envErr := loadEnvFile(state, filepath.Join(state.BaseDir, ".env")); envErr != nil && !errors.Is(envErr, os.ErrNotExist) {
+			buildErr = fmt.Errorf("failed to load .env: %w", envErr)
+			sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
+			return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
+		}
 	}
 
 	if err := executeInstructions(state, instructions); err != nil {
@@ -199,6 +225,10 @@ func processBuild(job Job) error {
 
 func executeInstructions(state *BuildState, instructions []Instruction) error {
 	var wg sync.WaitGroup
+	// Ensure async workers are drained even if a synchronous instruction panics,
+	// so processBuild does not close the result channel while a worker still
+	// writes to it.
+	defer wg.Wait()
 	errChan := make(chan error, len(instructions))
 	var cmdInstruction *Instruction
 	var syncErr error
@@ -225,12 +255,19 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 			wg.Add(1)
 			go func(instruction Instruction, instructionNumber int, instructionState *BuildState) {
 				defer wg.Done()
-				select {
-				case asyncSemaphore <- struct{}{}:
-					defer func() { <-asyncSemaphore }()
-				case <-instructionState.Context.Done():
-					errChan <- instructionState.Context.Err()
-					return
+				// SUB mostly waits on its own (already-throttled) child
+				// instructions rather than doing CPU-bound work. Holding a
+				// global semaphore slot across a nested build would let async
+				// SUBs starve their own children of slots and stall the build,
+				// so only leaf/CPU-bound directives consume a slot.
+				if instruction.Directive != "SUB" {
+					select {
+					case asyncSemaphore <- struct{}{}:
+						defer func() { <-asyncSemaphore }()
+					case <-instructionState.Context.Done():
+						errChan <- instructionState.Context.Err()
+						return
+					}
 				}
 				if err := executeInstruction(instructionState, instruction); err != nil {
 					errChan <- fmt.Errorf("(%d/%d) line %d [%s%s %s]: %w", instructionNumber, len(instructions), instruction.Line, instruction.Symbol, instruction.Directive, instruction.Args, err)
@@ -349,21 +386,21 @@ func lockStatusStore() (func(), error) {
 		return nil, fmt.Errorf("failed to create lock directory %s: %w", stateDir, err)
 	}
 	_ = hideFile(stateDir)
-	
+
 	fileLock := flock.New(lockPath)
 	locked, err := fileLock.TryLock()
 	if err != nil {
 		return nil, fmt.Errorf("failed to check lock status: %w", err)
 	}
-	
+
 	if !locked {
 		logger.Printf("Waiting for lock on %s...", lockPath)
-		for i := 0; i < 50; i++ {
+		for i := 0; i < lockRetries; i++ {
 			locked, err = fileLock.TryLock()
 			if err == nil && locked {
 				break
 			}
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(lockRetryInterval)
 		}
 		if !locked {
 			return nil, fmt.Errorf("timeout waiting for lock on %s", lockPath)
@@ -399,8 +436,8 @@ func saveBuildInfo(buildInfo BuildInfo) error {
 	if !replaced {
 		builds = append(builds, buildInfo)
 	}
-	if len(builds) > 1000 {
-		builds = builds[len(builds)-1000:]
+	if len(builds) > maxStoredBuilds {
+		builds = builds[len(builds)-maxStoredBuilds:]
 	}
 	return writeBuildInfosLocked(builds)
 }
@@ -408,13 +445,13 @@ func saveBuildInfo(buildInfo BuildInfo) error {
 func readBuildInfos() ([]BuildInfo, error) {
 	statusStoreMu.Lock()
 	defer statusStoreMu.Unlock()
-	
+
 	unlock, err := lockStatusStore()
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
-	
+
 	return readBuildInfosLocked()
 }
 
@@ -464,10 +501,10 @@ func writeBuildInfosLocked(builds []BuildInfo) error {
 	return os.Rename(tmpPath, path)
 }
 
-func loadEnvFile(state *BuildState, filename string) {
+func loadEnvFile(state *BuildState, filename string) error {
 	file, err := os.Open(filename)
 	if err != nil {
-		return
+		return err
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
@@ -486,4 +523,5 @@ func loadEnvFile(state *BuildState, filename string) {
 			state.Env[k] = v
 		}
 	}
+	return scanner.Err()
 }

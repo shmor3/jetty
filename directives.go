@@ -18,6 +18,13 @@ import (
 	"github.com/ory/dockertest/v3"
 )
 
+const (
+	// remoteFetchTimeout bounds how long a remote SUB fetch may take.
+	remoteFetchTimeout = 30 * time.Second
+	// maxRemoteJettyfileSize caps the size of a remotely fetched Jettyfile.
+	maxRemoteJettyfileSize = 10 << 20 // 10 MiB
+)
+
 func executeInstruction(state *BuildState, inst Instruction) error {
 	switch inst.Directive {
 	case "ARG":
@@ -32,7 +39,7 @@ func executeInstruction(state *BuildState, inst Instruction) error {
 			return err
 		}
 		state.Env[key] = state.expand(value)
-		state.log("ENV: %s=%s", key, state.Env[key])
+		state.log("ENV: %s set", key)
 	case "RUN":
 		if err := executeShell(state, "RUN", inst.Args); err != nil {
 			return err
@@ -185,7 +192,12 @@ func executeSubBuild(state *BuildState, args string) error {
 
 	if githubURL != "" {
 		state.log("SUB: Fetching %s", rawArg)
-		resp, err := http.Get(githubURL)
+		req, err := http.NewRequestWithContext(state.Context, http.MethodGet, githubURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to build request for remote Jettyfile: %w", err)
+		}
+		client := &http.Client{Timeout: remoteFetchTimeout}
+		resp, err := client.Do(req)
 		if err != nil {
 			return fmt.Errorf("failed to fetch remote Jettyfile: %w", err)
 		}
@@ -198,7 +210,7 @@ func executeSubBuild(state *BuildState, args string) error {
 			return fmt.Errorf("failed to create temp file for remote Jettyfile: %w", err)
 		}
 		defer os.Remove(tmpFile.Name())
-		if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		if _, err := io.Copy(tmpFile, io.LimitReader(resp.Body, maxRemoteJettyfileSize)); err != nil {
 			tmpFile.Close()
 			return fmt.Errorf("failed to write remote Jettyfile: %w", err)
 		}
@@ -304,7 +316,9 @@ func executeUse(state *BuildState, args string) error {
 		return fmt.Errorf("USE requires a command")
 	}
 	box := state.Boxes[boxName]
-	return execInContainer(state.Context, command, state.Env, box, state.WorkDir, state)
+	// Expand Jetty ARG/ENV references so USE behaves consistently with RUN,
+	// which pre-expands its script via state.expand before executing.
+	return execInContainer(state.Context, state.expand(command), state.Env, box, state.WorkDir, state)
 }
 
 func executeFormat(state *BuildState, inst Instruction) error {
@@ -339,7 +353,7 @@ func executeFormat(state *BuildState, inst Instruction) error {
 			return fmt.Errorf("invalid environment variable name: %s", name)
 		}
 		state.Env[name] = sprintfExpanded(state, parts[1], parts[2:])
-		state.log("$FMT: %s=%s", name, state.Env[name])
+		state.log("$FMT: %s set", name)
 	case "&":
 		if len(parts) < 2 {
 			return fmt.Errorf("&FMT requires an argument name and format string")
@@ -349,7 +363,7 @@ func executeFormat(state *BuildState, inst Instruction) error {
 			return fmt.Errorf("invalid argument name: %s", name)
 		}
 		state.Args[name] = sprintfExpanded(state, parts[1], parts[2:])
-		state.log("&FMT: %s=%s", name, state.Args[name])
+		state.log("&FMT: %s set", name)
 	default:
 		return fmt.Errorf("unsupported FMT modifier: %s", inst.Symbol)
 	}
@@ -370,7 +384,7 @@ func executePlugin(state *BuildState, args string) error {
 		pluginPath = filepath.Join("plugins", pluginPath)
 	}
 	pluginPath = state.resolvePath(pluginPath)
-	
+
 	if runtime.GOOS == "windows" {
 		if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
 			if _, errExe := os.Stat(pluginPath + ".exe"); errExe == nil {
@@ -481,7 +495,7 @@ func (state *BuildState) commandEnv() []string {
 	return env
 }
 
-func (state *BuildState) log(format string, v ...interface{}) {
+func (state *BuildState) log(format string, v ...any) {
 	sendResult(state.Context, state.ResultChan, fmt.Sprintf(format, v...))
 }
 
@@ -498,7 +512,7 @@ func (state *BuildState) expand(value string) string {
 }
 
 func sprintfExpanded(state *BuildState, format string, values []string) string {
-	expanded := make([]interface{}, len(values))
+	expanded := make([]any, len(values))
 	for i, value := range values {
 		expanded[i] = state.expand(value)
 	}
@@ -540,7 +554,11 @@ func execInContainer(ctx context.Context, command string, env map[string]string,
 	if err != nil {
 		return fmt.Errorf("could not start container %s:%s: %w", box.Repository, box.Tag, err)
 	}
+	purged := false
 	defer func() {
+		if purged {
+			return
+		}
 		if err := pool.Purge(resource); err != nil {
 			logger.Printf("Warning: failed to purge container: %v", err)
 		}
@@ -567,7 +585,16 @@ func execInContainer(ctx context.Context, command string, env map[string]string,
 	var exitCode int
 	select {
 	case <-ctx.Done():
-		errExec = ctx.Err()
+		// Purge the container so the running exec terminates, then wait for the
+		// exec goroutine to return before exiting. Otherwise it could keep
+		// writing to the lineWriter (and its result channel) after we return
+		// and processBuild closes that channel — a send-on-closed-channel panic.
+		if err := pool.Purge(resource); err != nil {
+			logger.Printf("Warning: failed to purge container: %v", err)
+		}
+		purged = true
+		<-execDone
+		return ctx.Err()
 	case res := <-execDone:
 		errExec = res.err
 		exitCode = res.code

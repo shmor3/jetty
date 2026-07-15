@@ -14,7 +14,7 @@ func shellCommand(ctx context.Context, script string) *exec.Cmd {
 	if shell, err := exec.LookPath("sh"); err == nil {
 		cmd = exec.CommandContext(ctx, shell, "-c", script)
 	}
-	
+
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
