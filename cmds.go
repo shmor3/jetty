@@ -139,11 +139,12 @@ func registeredCommands() {
 	registerCommand("build", Command{
 		Name:        "build",
 		Description: "Run a new build",
-		Usage:       "build [-f filename] [filename]",
+		Usage:       "build [-f filename] [--env-file filename] [filename]",
 		Run: func(ctx context.Context, args []string) error {
 			fs := flag.NewFlagSet("build", flag.ContinueOnError)
 			fs.SetOutput(os.Stderr)
 			fileFlag := fs.String("f", "", "Specify the build file")
+			envFileFlag := fs.String("env-file", "", "Specify an environment variable file to load")
 			if err := fs.Parse(args); err != nil {
 				return err
 			}
@@ -173,7 +174,7 @@ func registeredCommands() {
 			start := time.Now()
 
 			go func() {
-				errChan <- build(ctx, fileName, buildID, workerNode, resultChan, buildInfoChan)
+				errChan <- build(ctx, fileName, buildID, workerNode, resultChan, buildInfoChan, *envFileFlag)
 			}()
 
 			resultOpen := true

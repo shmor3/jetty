@@ -60,6 +60,7 @@ type Job struct {
 	Context       context.Context
 	InitialArgs   map[string]string
 	InitialEnv    map[string]string
+	EnvFile       string
 	Depth         int
 }
 
@@ -84,7 +85,7 @@ type BoxInfo struct {
 	Tag        string
 }
 
-func build(ctx context.Context, fileName string, buildID string, workerNode string, resultChan chan<- string, buildInfoChan chan<- BuildInfo) error {
+func build(ctx context.Context, fileName string, buildID string, workerNode string, resultChan chan<- string, buildInfoChan chan<- BuildInfo, envFile string) error {
 	return processBuild(Job{
 		BuildID:       buildID,
 		FileName:      fileName,
@@ -92,6 +93,7 @@ func build(ctx context.Context, fileName string, buildID string, workerNode stri
 		BuildInfoChan: buildInfoChan,
 		WorkerNode:    workerNode,
 		Context:       ctx,
+		EnvFile:       envFile,
 	})
 }
 
@@ -180,7 +182,11 @@ func processBuild(job Job) error {
 	state.Args["BUILD_ID"] = job.BuildID
 	state.Args["WORKER_NODE"] = job.WorkerNode
 
-	loadEnvFile(state, filepath.Join(state.BaseDir, ".env"))
+	if job.EnvFile != "" {
+		loadEnvFile(state, job.EnvFile)
+	} else {
+		loadEnvFile(state, filepath.Join(state.BaseDir, ".env"))
+	}
 
 	if err := executeInstructions(state, instructions); err != nil {
 		state.cancel()

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -148,10 +150,38 @@ func executeCopy(state *BuildState, args string) error {
 }
 
 func executeSubBuild(state *BuildState, args string) error {
-	referencedFile, err := state.singlePath(args, "SUB")
-	if err != nil {
-		return err
+	rawArg := strings.TrimSpace(state.expand(args))
+	var referencedFile string
+
+	if strings.HasPrefix(rawArg, "http://") || strings.HasPrefix(rawArg, "https://") {
+		state.log("SUB: Downloading %s", rawArg)
+		resp, err := http.Get(rawArg)
+		if err != nil {
+			return fmt.Errorf("failed to fetch remote Jettyfile: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("failed to fetch remote Jettyfile: HTTP %s", resp.Status)
+		}
+		tmpFile, err := os.CreateTemp("", "jettyfile-*")
+		if err != nil {
+			return fmt.Errorf("failed to create temp file for remote Jettyfile: %w", err)
+		}
+		defer os.Remove(tmpFile.Name())
+		if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+			tmpFile.Close()
+			return fmt.Errorf("failed to write remote Jettyfile: %w", err)
+		}
+		tmpFile.Close()
+		referencedFile = tmpFile.Name()
+	} else {
+		var err error
+		referencedFile, err = state.singlePath(args, "SUB")
+		if err != nil {
+			return err
+		}
 	}
+
 	subBuildID := fmt.Sprintf("%s-sub-%d", state.BuildID, time.Now().UnixNano())
 	subResultChan := make(chan string)
 	subBuildInfoChan := make(chan BuildInfo)
@@ -173,7 +203,7 @@ func executeSubBuild(state *BuildState, args string) error {
 		}
 	}()
 
-	err = processBuild(Job{
+	err := processBuild(Job{
 		BuildID:       subBuildID,
 		FileName:      referencedFile,
 		ResultChan:    subResultChan,
