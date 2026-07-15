@@ -36,7 +36,7 @@ jetty ps -a
 
 `jetty build` uses `Jettyfile` in the current directory unless a file is passed with `-f` or as a positional argument.
 
-`jetty status` reads `.jetty/builds.json` from the current directory by default and shows recorded build history. `jetty ps` shows active builds by default; use `jetty ps -a` for history. Set `JETTY_STATE_DIR` to write and read status from another directory.
+`jetty status` reads `.jetty/builds.json` from the current directory by default and shows recorded build history. `jetty ps` shows active builds by default; use `jetty ps -a` for history. Set `JETTY_STATE_DIR` to write and read status from another directory. Set `JETTY_TIMEOUT` to configure the maximum execution time (defaults to 10m).
 
 ## Jettyfile Example
 
@@ -66,7 +66,7 @@ CMD echo finished
 | `WDR path` | Changes Jetty's build-local working directory for later directives. |
 | `CPY source destination` | Copies a file or directory. |
 | `*CPY source destination` | Copies a file or directory asynchronously. |
-| `SUB file` | Runs another Jettyfile synchronously. The sub-build inherits current args and environment. |
+| `SUB file` | Runs another Jettyfile synchronously. The sub-build inherits current args and environment. Maximum recursion depth is 50. |
 | `*SUB file` | Runs another Jettyfile asynchronously. |
 | `FMT format args...` | Formats a string and writes it to build output. |
 | `^FMT file format args...` | Appends a formatted string to a file. |

@@ -50,6 +50,7 @@ type Job struct {
 	Context       context.Context
 	InitialArgs   map[string]string
 	InitialEnv    map[string]string
+	Depth         int
 }
 
 type BuildState struct {
@@ -65,6 +66,7 @@ type BuildState struct {
 	DefaultBox string
 	ResultChan chan<- string
 	Cancel     context.CancelFunc
+	Depth      int
 }
 
 type BoxInfo struct {
@@ -104,6 +106,11 @@ func processBuild(job Job) error {
 		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 		return fmt.Errorf("%w: %v", ErrBuildFailed, buildErr)
 	}
+	if job.Depth > 50 {
+		buildErr := errors.New("maximum sub-build depth exceeded")
+		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
+		return fmt.Errorf("%w: %v", ErrBuildFailed, buildErr)
+	}
 
 	absFileName, err := filepath.Abs(job.FileName)
 	if err != nil {
@@ -120,6 +127,10 @@ func processBuild(job Job) error {
 
 	var buildErr error
 	defer func() {
+		r := recover()
+		if r != nil {
+			buildErr = fmt.Errorf("panic: %v", r)
+		}
 		buildInfo.EndTime = time.Now()
 		if buildErr != nil {
 			buildInfo.Status = statusFailed
@@ -128,6 +139,9 @@ func processBuild(job Job) error {
 			buildInfo.Status = statusCompleted
 		}
 		publishBuildInfo(job.Context, job.BuildInfoChan, buildInfo)
+		if r != nil {
+			panic(r)
+		}
 	}()
 
 	if job.FileName == "" {
@@ -156,6 +170,7 @@ func processBuild(job Job) error {
 		Boxes:      make(map[string]BoxInfo),
 		ResultChan: job.ResultChan,
 		Cancel:     cancel,
+		Depth:      job.Depth,
 	}
 	state.Args["BUILD_ID"] = job.BuildID
 	state.Args["WORKER_NODE"] = job.WorkerNode
@@ -197,6 +212,7 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 				defer wg.Done()
 				if err := executeInstruction(instructionState, instruction); err != nil {
 					errChan <- fmt.Errorf("(%d/%d) line %d: %w", instructionNumber, len(instructions), instruction.Line, err)
+					instructionState.cancel()
 				}
 			}(inst, count, asyncState)
 			continue
@@ -286,6 +302,7 @@ func (state *BuildState) snapshot() *BuildState {
 		DefaultBox: state.DefaultBox,
 		ResultChan: state.ResultChan,
 		Cancel:     state.Cancel,
+		Depth:      state.Depth,
 	}
 }
 
@@ -303,9 +320,35 @@ func statusStorePath() string {
 	return filepath.Join(stateDir, "builds.json")
 }
 
+func lockStatusStore() (func(), error) {
+	lockPath := statusStorePath() + ".lock"
+	stateDir := filepath.Dir(lockPath)
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		return nil, err
+	}
+	_ = hideFile(stateDir)
+	for i := 0; i < 50; i++ {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
+		if err == nil {
+			return func() {
+				f.Close()
+				os.Remove(lockPath)
+			}, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("timeout acquiring lock on builds.json. If no other jetty process is running, delete %s and try again", lockPath)
+}
+
 func saveBuildInfo(buildInfo BuildInfo) error {
 	statusStoreMu.Lock()
 	defer statusStoreMu.Unlock()
+
+	unlock, err := lockStatusStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	builds, err := readBuildInfosLocked()
 	if err != nil {
@@ -322,12 +365,22 @@ func saveBuildInfo(buildInfo BuildInfo) error {
 	if !replaced {
 		builds = append(builds, buildInfo)
 	}
+	if len(builds) > 1000 {
+		builds = builds[len(builds)-1000:]
+	}
 	return writeBuildInfosLocked(builds)
 }
 
 func readBuildInfos() ([]BuildInfo, error) {
 	statusStoreMu.Lock()
 	defer statusStoreMu.Unlock()
+	
+	unlock, err := lockStatusStore()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	
 	return readBuildInfosLocked()
 }
 
@@ -352,9 +405,11 @@ func readBuildInfosLocked() ([]BuildInfo, error) {
 
 func writeBuildInfosLocked(builds []BuildInfo) error {
 	path := statusStorePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	stateDir := filepath.Dir(path)
+	if err := os.MkdirAll(stateDir, 0755); err != nil {
 		return err
 	}
+	_ = hideFile(stateDir)
 	data, err := json.MarshalIndent(builds, "", "  ")
 	if err != nil {
 		return err
