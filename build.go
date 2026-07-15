@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 )
 
 const (
@@ -328,17 +330,29 @@ func lockStatusStore() (func(), error) {
 		return nil, fmt.Errorf("failed to create lock directory %s: %w", stateDir, err)
 	}
 	_ = hideFile(stateDir)
-	for i := 0; i < 50; i++ {
-		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
-		if err == nil {
-			return func() {
-				f.Close()
-				os.Remove(lockPath)
-			}, nil
-		}
-		time.Sleep(100 * time.Millisecond)
+	
+	fileLock := flock.New(lockPath)
+	locked, err := fileLock.TryLock()
+	if err != nil {
+		return nil, fmt.Errorf("failed to check lock status: %w", err)
 	}
-	return nil, fmt.Errorf("timeout acquiring lock on builds.json. If no other jetty process is running, delete %s and try again", lockPath)
+	
+	if !locked {
+		logger.Printf("Waiting for lock on %s...", lockPath)
+		for i := 0; i < 50; i++ {
+			locked, err = fileLock.TryLock()
+			if err == nil && locked {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if !locked {
+			return nil, fmt.Errorf("timeout waiting for lock on %s", lockPath)
+		}
+	}
+	return func() {
+		fileLock.Unlock()
+	}, nil
 }
 
 func saveBuildInfo(buildInfo BuildInfo) error {
@@ -445,7 +459,12 @@ func loadEnvFile(state *BuildState, filename string) {
 		}
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) == 2 {
-			state.Env[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			k := strings.TrimSpace(parts[0])
+			v := strings.TrimSpace(parts[1])
+			if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
+				v = v[1 : len(v)-1]
+			}
+			state.Env[k] = v
 		}
 	}
 }
