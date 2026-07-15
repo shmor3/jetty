@@ -71,6 +71,8 @@ var directiveSymbols = map[string]map[string]bool{
 	"ENV": {"": true},
 	"RUN": {"": true, "*": true},
 	"CMD": {"": true},
+	"DEP": {"": true},
+	"OUT": {"": true},
 	"DIR": {"": true},
 	"CPY": {"": true, "*": true},
 	"WDR": {"": true},
