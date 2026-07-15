@@ -173,7 +173,7 @@ func TestValidateArgs(t *testing.T) {
 
 func TestParseFileErrors(t *testing.T) {
 	dir := t.TempDir()
-	
+
 	// Test file open error
 	_, err := parseFile(filepath.Join(dir, "nonexistent"))
 	if err == nil {
@@ -213,7 +213,7 @@ func TestParseDirectiveTokenEdgeCases(t *testing.T) {
 	// Missing modifier logic
 	originalSymbols := directiveSymbols["BOX"]
 	directiveSymbols["BOX"] = map[string]bool{"*": true} // ONLY allows *
-	
+
 	_, _, err = parseDirectiveToken("BOX")
 	if err == nil || !strings.Contains(err.Error(), "requires a supported modifier") {
 		t.Errorf("expected missing modifier error, got %v", err)
@@ -223,7 +223,7 @@ func TestParseDirectiveTokenEdgeCases(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "is not supported for directive") {
 		t.Errorf("expected unsupported modifier error, got %v", err)
 	}
-	
+
 	directiveSymbols["BOX"] = originalSymbols
 }
 
@@ -232,7 +232,7 @@ func TestParseFileEmptyAndComments(t *testing.T) {
 	fileName := filepath.Join(dir, "Jettyfile")
 	content := "\n# comment\nRUN echo hello\n\n# another comment\n"
 	os.WriteFile(fileName, []byte(content), 0644)
-	
+
 	instructions, err := parseFile(fileName)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

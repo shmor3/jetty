@@ -472,9 +472,9 @@ func TestLoadEnvFile(t *testing.T) {
 	file := filepath.Join(dir, "env")
 	content := "A=B\nC=D\n#comment\n\nE=\"F\"\nG='H'"
 	os.WriteFile(file, []byte(content), 0644)
-	
+
 	loadEnvFile(state, file)
-	
+
 	if state.Env["A"] != "B" || state.Env["C"] != "D" || state.Env["E"] != "F" || state.Env["G"] != "H" {
 		t.Errorf("failed to load environment variables, got %v", state.Env)
 	}
@@ -501,7 +501,7 @@ func TestProcessBuildEdgeCases(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "Jettyfile")
 	os.WriteFile(file, []byte(""), 0644)
-	
+
 	job = Job{FileName: file}
 	// processBuild will return nil for an empty file, covering the defaults
 	processBuild(job)
@@ -514,7 +514,7 @@ func TestLockStatusStoreErrors(t *testing.T) {
 	os.WriteFile(badDir, []byte(""), 0644)
 	os.Setenv("JETTY_STATE_DIR", badDir)
 	defer os.Unsetenv("JETTY_STATE_DIR")
-	
+
 	_, err := lockStatusStore()
 	if err == nil {
 		t.Errorf("expected MkdirAll failure")
@@ -532,13 +532,13 @@ func TestLockStatusStoreErrors(t *testing.T) {
 
 	// second lock should timeout after 5 seconds, wait that's long.
 	// wait, the loop is 50 * 100ms = 5 seconds.
-	// To speed it up, we can just run it in a goroutine or wait. 
+	// To speed it up, we can just run it in a goroutine or wait.
 	// For test it's fine.
 	_, err = lockStatusStore()
 	if err == nil || !strings.Contains(err.Error(), "timeout waiting for lock") {
 		t.Errorf("expected lock timeout, got %v", err)
 	}
-	
+
 	unlock()
 }
 
@@ -566,12 +566,12 @@ func TestBuildInfoErrors(t *testing.T) {
 	// 2. Cannot read file because it is a directory
 	os.Remove(storePath)
 	os.MkdirAll(storePath, 0755)
-	
+
 	err = saveBuildInfo(BuildInfo{ID: "test2"})
 	if err == nil {
 		t.Error("expected saveBuildInfo to fail when builds.json is a directory")
 	}
-	
+
 	// 3. writeBuildInfosLocked failure
 	os.Remove(storePath)
 	// make stateDir readonly to cause CreateTemp to fail
@@ -636,7 +636,7 @@ func TestPublishBuildInfoContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan BuildInfo)
 	cancel()
-	
+
 	// This should return immediately because ctx is done,
 	// rather than blocking forever on the unbuffered channel.
 	publishBuildInfo(ctx, ch, BuildInfo{})
@@ -671,12 +671,12 @@ func TestReadBuildInfosError(t *testing.T) {
 	}
 	f.Close()
 	defer os.Remove(f.Name())
-	
+
 	// Make lock fail or read fail
 	// Actually, if we set JETTY_STATE_DIR to \x00invalid, os.ReadFile might fail. But wait, lockStatusStore creates the dir and it will fail.
 	os.Setenv(jettyStateDirEnv, f.Name())
 	defer os.Setenv(jettyStateDirEnv, oldEnv)
-	
+
 	_, err = readBuildInfos()
 	if err == nil {
 		t.Error("expected readBuildInfos to fail due to lock failure")
@@ -699,7 +699,7 @@ func TestSnapshot(t *testing.T) {
 		Env:     map[string]string{"A": "B"},
 		Boxes:   map[string]BoxInfo{"box1": {Repository: "repo1"}},
 	}
-	
+
 	snap := state.snapshot()
 	if snap.Args["foo"] != "bar" {
 		t.Error("snapshot did not clone Args")

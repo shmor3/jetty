@@ -151,7 +151,7 @@ func TestExecutePlugin(t *testing.T) {
 		os.WriteFile(batFile, []byte("@echo hello"), 0755)
 		state.BaseDir = dir
 		state.WorkDir = dir
-		
+
 		err = executePlugin(state, "myplugin")
 		if err != nil {
 			t.Errorf("expected bat plugin to execute, got %v", err)
@@ -300,7 +300,6 @@ func TestExecuteInstruction(t *testing.T) {
 		t.Errorf("expected USE to fail with invalid container image")
 	}
 
-
 	// Test unknown directive
 	err = executeInstruction(state, Instruction{Directive: "UNKNOWN", Args: ""})
 	if err == nil {
@@ -388,7 +387,7 @@ func TestExecuteInstruction(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected JET to fail with broken quotes")
 	}
-	
+
 	// Test ENV invalid
 	err = executeInstruction(state, Instruction{Directive: "ENV", Args: "invalid"})
 	if err == nil {
@@ -494,12 +493,12 @@ func TestExecuteSubBuild(t *testing.T) {
 	}
 
 	state := &BuildState{
-		Context:       context.Background(),
-		WorkDir:       dir,
-		BaseDir:       dir,
-		Args:          make(map[string]string),
-		Env:           make(map[string]string),
-		ResultChan:    make(chan string, 100),
+		Context:    context.Background(),
+		WorkDir:    dir,
+		BaseDir:    dir,
+		Args:       make(map[string]string),
+		Env:        make(map[string]string),
+		ResultChan: make(chan string, 100),
 	}
 
 	err = executeSubBuild(state, "SubJettyfile")
@@ -515,11 +514,11 @@ func TestExecuteSubBuild(t *testing.T) {
 
 func TestExecuteSubBuildGithub(t *testing.T) {
 	state := &BuildState{
-		Context: context.Background(),
-		WorkDir: t.TempDir(),
-		BaseDir: t.TempDir(),
-		Args:    make(map[string]string),
-		Env:     make(map[string]string),
+		Context:    context.Background(),
+		WorkDir:    t.TempDir(),
+		BaseDir:    t.TempDir(),
+		Args:       make(map[string]string),
+		Env:        make(map[string]string),
 		ResultChan: make(chan string, 100),
 	}
 

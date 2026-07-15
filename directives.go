@@ -107,7 +107,7 @@ func executeInstruction(state *BuildState, inst Instruction) error {
 		if err := executeCopy(state, inst.Args); err != nil {
 			return err
 		}
-		
+
 		if err := saveCache(state); err != nil {
 			return err
 		}
@@ -140,11 +140,11 @@ func executeInstruction(state *BuildState, inst Instruction) error {
 			state.CurrentCacheKey = ""
 			break
 		}
-		
+
 		if err := executeUse(state, inst.Args); err != nil {
 			return err
 		}
-		
+
 		if err := saveCache(state); err != nil {
 			return err
 		}
@@ -437,7 +437,7 @@ func executePlugin(state *BuildState, args string) error {
 		pluginPath = filepath.Join("plugins", pluginPath)
 	}
 	pluginPath = state.resolvePath(pluginPath)
-	
+
 	if runtime.GOOS == "windows" {
 		if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
 			if _, errExe := os.Stat(pluginPath + ".exe"); errExe == nil {

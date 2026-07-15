@@ -277,17 +277,17 @@ func printBuildInfos(builds []BuildInfo) {
 		if !info.EndTime.IsZero() {
 			end = info.EndTime.Format(time.RFC3339)
 		}
-		
+
 		idStr := info.ID
 		if len(idStr) > 25 {
 			idStr = "..." + idStr[len(idStr)-22:]
 		}
-		
+
 		errStr := info.Error
 		if len(errStr) > 50 {
 			errStr = errStr[:47] + "..."
 		}
-		
+
 		fileName := info.FileName
 		if len(fileName) > 35 {
 			fileName = "..." + fileName[len(fileName)-32:]

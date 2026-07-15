@@ -22,7 +22,7 @@ func TestCacheLogic(t *testing.T) {
 	// Create some dummy dependency files
 	depFile := filepath.Join(tempDir, "dep.txt")
 	os.WriteFile(depFile, []byte("dependency content"), 0644)
-	
+
 	outFile := filepath.Join(tempDir, "out.txt")
 
 	// 1. Initial DEP and OUT
@@ -91,7 +91,7 @@ func TestCacheLogic(t *testing.T) {
 	if cached {
 		t.Fatalf("expected cache miss after output tampered, got hit")
 	}
-	
+
 	// Test cache lock timeout
 	unlock, _ := lockCacheStore()
 	_, err = lockCacheStore()
