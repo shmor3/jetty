@@ -186,9 +186,14 @@ func processBuild(job Job) error {
 	state.Args["WORKER_NODE"] = job.WorkerNode
 
 	if job.EnvFile != "" {
-		loadEnvFile(state, job.EnvFile)
+		if err := loadEnvFile(state, job.EnvFile); err != nil {
+			buildErr = fmt.Errorf("failed to load env file %s: %w", job.EnvFile, err)
+			sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
+			return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
+		}
 	} else {
-		loadEnvFile(state, filepath.Join(state.BaseDir, ".env"))
+		// Ignore error if default .env file doesn't exist
+		_ = loadEnvFile(state, filepath.Join(state.BaseDir, ".env"))
 	}
 
 	if err := executeInstructions(state, instructions); err != nil {
@@ -474,10 +479,10 @@ func writeBuildInfosLocked(builds []BuildInfo) error {
 	return os.Rename(tmpPath, path)
 }
 
-func loadEnvFile(state *BuildState, filename string) {
+func loadEnvFile(state *BuildState, filename string) error {
 	file, err := os.Open(filename)
 	if err != nil {
-		return
+		return err
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
@@ -496,4 +501,5 @@ func loadEnvFile(state *BuildState, filename string) {
 			state.Env[k] = v
 		}
 	}
+	return scanner.Err()
 }

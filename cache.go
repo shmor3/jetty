@@ -115,6 +115,10 @@ func writeCacheLocked(cache map[string]CacheEntry) error {
 }
 
 func hashFiles(workDir string, patterns []string) (string, error) {
+	if len(patterns) == 0 {
+		return "none", nil
+	}
+
 	var files []string
 	for _, pattern := range patterns {
 		matches, err := filepath.Glob(filepath.Join(workDir, pattern))
@@ -146,7 +150,7 @@ func hashFiles(workDir string, patterns []string) (string, error) {
 	}
 
 	if len(files) == 0 {
-		return "empty", nil
+		return "missing", nil
 	}
 
 	// Deduplicate and sort
@@ -223,7 +227,7 @@ func checkCache(state *BuildState, inst Instruction) (bool, error) {
 	}
 
 	if len(state.PendingOuts) == 0 {
-		if entry.Outputs["hash"] == "empty" {
+		if entry.Outputs["hash"] == "none" {
 			return true, nil
 		}
 		return false, nil
@@ -231,6 +235,13 @@ func checkCache(state *BuildState, inst Instruction) (bool, error) {
 
 	currentOutsHash, err := hashFiles(state.WorkDir, state.PendingOuts)
 	if err != nil || currentOutsHash != entry.Outputs["hash"] {
+		return false, nil
+	}
+	
+	// If the expected outputs are missing, NEVER hit the cache. We must run to produce them.
+	// Wait, if they were missing when cached, we could hit it, but it's safer to always rerun if outputs are unexpectedly missing.
+	// We'll let it hit if entry.Outputs["hash"] is also "missing", which means the command consistently produces no outputs.
+	if currentOutsHash == "missing" && entry.Outputs["hash"] != "missing" {
 		return false, nil
 	}
 
