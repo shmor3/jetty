@@ -92,11 +92,16 @@ func TestCacheLogic(t *testing.T) {
 		t.Fatalf("expected cache miss after output tampered, got hit")
 	}
 
-	// Test cache lock timeout
-	unlock, _ := lockCacheStore()
-	_, err = lockCacheStore()
-	if err == nil {
-		t.Fatalf("expected lock error on second attempt")
+	// The cache lock blocks rather than timing out: acquire, release, and then
+	// re-acquire must all succeed without a spurious error or deadlock.
+	unlock, err := lockCacheStore()
+	if err != nil {
+		t.Fatalf("unexpected error acquiring cache lock: %v", err)
 	}
 	unlock()
+	unlock2, err := lockCacheStore()
+	if err != nil {
+		t.Fatalf("expected to re-acquire the cache lock after release: %v", err)
+	}
+	unlock2()
 }
