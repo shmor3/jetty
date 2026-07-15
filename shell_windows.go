@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"time"
 )
@@ -16,10 +15,10 @@ func shellCommand(ctx context.Context, script string) *exec.Cmd {
 	}
 
 	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return cmd.Process.Signal(os.Interrupt)
+		// Windows cannot deliver os.Interrupt to another process; Signal would
+		// only return a misleading "not supported by windows" error. Return nil
+		// so os/exec falls through to WaitDelay's forced kill of the child.
+		return nil
 	}
 	cmd.WaitDelay = 5 * time.Second
 	return cmd
