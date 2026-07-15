@@ -120,6 +120,7 @@ func TestHandleSubcommands(t *testing.T) {
 }
 
 func TestMainExec(t *testing.T) {
+	t.Setenv(jettyStateDirEnv, filepath.Join(t.TempDir(), "state"))
 	oldArgs := os.Args
 	defer func() { os.Args = oldArgs }()
 
@@ -137,8 +138,9 @@ func TestMainExec(t *testing.T) {
 }
 
 func TestRegisteredCommands(t *testing.T) {
+	t.Setenv(jettyStateDirEnv, filepath.Join(t.TempDir(), "state"))
 	// Re-register to get original commands instead of mocked ones
-	registeredCommands()
+	registerCommands()
 
 	ctx := context.Background()
 
