@@ -76,10 +76,10 @@ var directiveSymbols = map[string]map[string]bool{
 	"WDR": {"": true},
 	"SUB": {"": true, "*": true},
 	"FRM": {"": true},
-	"JET": {"": true},
+	"JET": {"": true, "*": true},
 	"FMT": {"": true, "^": true, "$": true, "&": true},
 	"BOX": {"": true},
-	"USE": {"": true},
+	"USE": {"": true, "*": true},
 }
 
 func parseDirectiveToken(token string) (string, string, error) {
