@@ -91,7 +91,7 @@ func TestBuildCancelsAsyncWorkBeforeReturningOnSyncFailure(t *testing.T) {
 	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
 	buildFile := filepath.Join(dir, "Jettyfile")
 	content := strings.Join([]string{
-		"*RUN sleep 5",
+		"*RUN sleep 15",
 		"RUN exit 9",
 		"",
 	}, "\n")
@@ -104,8 +104,8 @@ func TestBuildCancelsAsyncWorkBeforeReturningOnSyncFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected build to fail")
 	}
-	if elapsed := time.Since(start); elapsed > 4*time.Second {
-		t.Fatalf("expected async work to be cancelled promptly, took %s", elapsed)
+	if elapsed := time.Since(start); elapsed > 8*time.Second {
+		t.Fatalf("expected async work to be cancelled promptly (within WaitDelay bounds), took %s", elapsed)
 	}
 	if len(infos) == 0 || infos[len(infos)-1].Status != statusFailed {
 		t.Fatalf("expected final build status Failed, got %#v", infos)

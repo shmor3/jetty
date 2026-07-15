@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -309,9 +310,22 @@ func executePlugin(state *BuildState, args string) error {
 		pluginPath = filepath.Join("plugins", pluginPath)
 	}
 	pluginPath = state.resolvePath(pluginPath)
-	pluginArgs := make([]string, 0, len(parts)-1)
-	for _, arg := range parts[1:] {
-		pluginArgs = append(pluginArgs, state.expand(arg))
+	
+	if runtime.GOOS == "windows" {
+		if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
+			if _, errExe := os.Stat(pluginPath + ".exe"); errExe == nil {
+				pluginPath += ".exe"
+			} else if _, errBat := os.Stat(pluginPath + ".bat"); errBat == nil {
+				pluginPath += ".bat"
+			} else if _, errCmd := os.Stat(pluginPath + ".cmd"); errCmd == nil {
+				pluginPath += ".cmd"
+			}
+		}
+	}
+
+	pluginArgs := make([]string, len(parts)-1)
+	for i, arg := range parts[1:] {
+		pluginArgs[i] = state.expand(arg)
 	}
 	cmd := exec.CommandContext(state.Context, pluginPath, pluginArgs...)
 	cmd.Dir = state.WorkDir

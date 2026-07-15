@@ -12,6 +12,7 @@ Built with extreme multi-platform reliability in mind, Jetty is designed to be a
 - **Async by Design:** Prepend `*` to any instruction (like `*RUN`, `*SUB`, `*USE`, or `*JET`) and Jetty immediately forks it to the background, waiting for it to finish gracefully before evaluating the final `CMD`.
 - **First-Class Docker Support:** `USE` commands transparently route execution into lightweight Docker containers while automatically mounting your local workspace.
 - **Cross-Platform:** Out of the box, Jetty handles path conversion (`\` vs `/`), carriage returns (`\r\n`), native Windows environments, and proper Unix process grouping.
+- **Mission Critical:** Features fully autonomous execution timing telemetry and native graceful shutdown signals (`SIGTERM` / `os.Interrupt`) across process groups to ensure background processes exit cleanly on cancellation.
 - **Build Isolation:** Working directories and environments are scoped tightly per-build to prevent cascading pollution.
 
 ## Install

@@ -148,6 +148,7 @@ func registeredCommands() {
 			buildID := fmt.Sprintf("%d", time.Now().UnixNano())
 			workerNode := "local"
 			var lastBuildInfo BuildInfo
+			start := time.Now()
 
 			go func() {
 				errChan <- build(ctx, fileName, buildID, workerNode, resultChan, buildInfoChan)
@@ -180,8 +181,8 @@ func registeredCommands() {
 			if err := <-errChan; err != nil {
 				return err
 			}
-			logger.Printf("Build %s: Status: %s, Worker: %s",
-				lastBuildInfo.ID, lastBuildInfo.Status, lastBuildInfo.WorkerNode)
+			logger.Printf("Build %s completed in %v. Status: %s, Worker: %s",
+				lastBuildInfo.ID, time.Since(start), lastBuildInfo.Status, lastBuildInfo.WorkerNode)
 			return nil
 		},
 		MinArgs: 0,
