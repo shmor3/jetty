@@ -41,6 +41,13 @@ type Command struct {
 func init() {
 	logger = log.New(os.Stderr, "", 0)
 	flag.Usage = customUsage
+	if t := os.Getenv("JETTY_TIMEOUT"); t != "" {
+		if d, err := time.ParseDuration(t); err == nil {
+			defaultTimeout = d
+		} else {
+			logger.Printf("Warning: invalid JETTY_TIMEOUT %q, using default %v", t, defaultTimeout)
+		}
+	}
 	registeredCommands()
 }
 

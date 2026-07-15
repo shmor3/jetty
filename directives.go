@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -108,12 +107,12 @@ func executeShell(state *BuildState, label string, script string) error {
 	cmd := shellCommand(state.Context, expandedScript)
 	cmd.Dir = state.WorkDir
 	cmd.Env = state.commandEnv()
-	output, err := cmd.CombinedOutput()
-	if len(output) > 0 {
-		state.log("%s: %s", label, strings.TrimRight(string(output), "\r\n"))
-	}
-	if err != nil {
-		return fmt.Errorf("%s command failed: %w", label, err)
+	lw := &lineWriter{label: label, state: state}
+	defer lw.Close()
+	cmd.Stdout = lw
+	cmd.Stderr = lw
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("shell command failed: %w", err)
 	}
 	return nil
 }
@@ -136,9 +135,9 @@ func executeCopy(state *BuildState, args string) error {
 		if isSubpath(src, dst) {
 			return fmt.Errorf("cannot copy directory %s into itself at %s", src, dst)
 		}
-		err = copyDir(src, dst)
+		err = copyDir(state.Context, src, dst)
 	} else {
-		err = copyFile(src, dst)
+		err = copyFile(state.Context, src, dst)
 	}
 	if err != nil {
 		return fmt.Errorf("copy failed: %w", err)
@@ -182,6 +181,7 @@ func executeSubBuild(state *BuildState, args string) error {
 		Context:       state.Context,
 		InitialArgs:   state.Args,
 		InitialEnv:    state.Env,
+		Depth:         state.Depth + 1,
 	})
 	wg.Wait()
 	if err != nil {
@@ -243,14 +243,7 @@ func executeUse(state *BuildState, args string) error {
 		return fmt.Errorf("USE requires a command")
 	}
 	box := state.Boxes[boxName]
-	output, err := execInContainer(state.Context, command, state.Env, box)
-	if len(output) > 0 {
-		state.log("USE %s: %s", boxName, strings.TrimRight(output, "\r\n"))
-	}
-	if err != nil {
-		return err
-	}
-	return nil
+	return execInContainer(state.Context, command, state.Env, box, state.WorkDir, state)
 }
 
 func executeFormat(state *BuildState, inst Instruction) error {
@@ -323,11 +316,11 @@ func executePlugin(state *BuildState, args string) error {
 	cmd := exec.CommandContext(state.Context, pluginPath, pluginArgs...)
 	cmd.Dir = state.WorkDir
 	cmd.Env = state.commandEnv()
-	output, err := cmd.CombinedOutput()
-	if len(output) > 0 {
-		state.log("JET %s: %s", pluginName, strings.TrimRight(string(output), "\r\n"))
-	}
-	if err != nil {
+	lw := &lineWriter{label: "JET " + pluginName, state: state}
+	defer lw.Close()
+	cmd.Stdout = lw
+	cmd.Stderr = lw
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("plugin %s failed: %w", pluginName, err)
 	}
 	return nil
@@ -379,6 +372,12 @@ func isSubpath(parent string, child string) bool {
 	childAbs, err := filepath.Abs(child)
 	if err != nil {
 		return false
+	}
+	if p, err := filepath.EvalSymlinks(parentAbs); err == nil {
+		parentAbs = p
+	}
+	if c, err := filepath.EvalSymlinks(childAbs); err == nil {
+		childAbs = c
 	}
 	parentAbs = filepath.Clean(parentAbs)
 	childAbs = filepath.Clean(childAbs)
@@ -445,13 +444,14 @@ func parseImageReference(image string) (BoxInfo, error) {
 	return BoxInfo{Repository: image, Tag: "latest"}, nil
 }
 
-func execInContainer(ctx context.Context, command string, env map[string]string, box BoxInfo) (string, error) {
+func execInContainer(ctx context.Context, command string, env map[string]string, box BoxInfo, workDir string, state *BuildState) error {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return err
 	}
+	state.log("USE %s: Preparing container environment %s:%s...", box.Repository, box.Repository, box.Tag)
 	pool, err := dockertest.NewPool("")
 	if err != nil {
-		return "", fmt.Errorf("could not connect to docker: %w", err)
+		return fmt.Errorf("could not connect to docker: %w", err)
 	}
 	resource, err := pool.RunWithOptions(&dockertest.RunOptions{
 		Repository: box.Repository,
@@ -459,9 +459,12 @@ func execInContainer(ctx context.Context, command string, env map[string]string,
 		Name:       fmt.Sprintf("jetty-%d", time.Now().UnixNano()),
 		Cmd:        []string{"tail", "-f", "/dev/null"},
 		Env:        formatEnv(env),
+		Mounts:     []string{fmt.Sprintf("%s:/workspace", workDir)},
+		WorkingDir: "/workspace",
+		Labels:     map[string]string{"createdBy": "jetty"},
 	})
 	if err != nil {
-		return "", fmt.Errorf("could not start container %s:%s: %w", box.Repository, box.Tag, err)
+		return fmt.Errorf("could not start container %s:%s: %w", box.Repository, box.Tag, err)
 	}
 	defer func() {
 		if err := pool.Purge(resource); err != nil {
@@ -469,21 +472,35 @@ func execInContainer(ctx context.Context, command string, env map[string]string,
 		}
 	}()
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode, err := resource.Exec([]string{"/bin/sh", "-c", command}, dockertest.ExecOptions{
-		Env:    formatEnv(env),
-		StdOut: &stdout,
-		StdErr: &stderr,
-	})
-	output := stdout.String() + stderr.String()
-	if err != nil {
-		return output, fmt.Errorf("container command failed: %w", err)
+	lw := &lineWriter{label: "USE " + box.Repository, state: state}
+	defer lw.Close()
+
+	execDone := make(chan error, 1)
+	var exitCode int
+	go func() {
+		code, e := resource.Exec([]string{"/bin/sh", "-c", command}, dockertest.ExecOptions{
+			Env:    formatEnv(env),
+			StdOut: lw,
+			StdErr: lw,
+		})
+		exitCode = code
+		execDone <- e
+	}()
+
+	var errExec error
+	select {
+	case <-ctx.Done():
+		errExec = ctx.Err()
+	case e := <-execDone:
+		errExec = e
+	}
+	if errExec != nil {
+		return fmt.Errorf("container command failed: %w", errExec)
 	}
 	if exitCode != 0 {
-		return output, fmt.Errorf("container command exited with status %d", exitCode)
+		return fmt.Errorf("container command exited with status %d", exitCode)
 	}
-	return output, ctx.Err()
+	return ctx.Err()
 }
 
 func formatEnv(env map[string]string) []string {
