@@ -225,6 +225,10 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 		count := i + 1
 		if inst.Symbol == "*" {
 			asyncState := state.snapshot()
+			state.PendingDeps = nil
+			state.PendingOuts = nil
+			state.CurrentCacheKey = ""
+			
 			wg.Add(1)
 			go func(instruction Instruction, instructionNumber int, instructionState *BuildState) {
 				defer wg.Done()
@@ -326,8 +330,11 @@ func (state *BuildState) snapshot() *BuildState {
 		Boxes:      cloneBoxMap(state.Boxes),
 		DefaultBox: state.DefaultBox,
 		ResultChan: state.ResultChan,
-		Cancel:     state.Cancel,
-		Depth:      state.Depth,
+		Cancel:          state.Cancel,
+		Depth:           state.Depth,
+		PendingDeps:     append([]string(nil), state.PendingDeps...),
+		PendingOuts:     append([]string(nil), state.PendingOuts...),
+		CurrentCacheKey: state.CurrentCacheKey,
 	}
 }
 

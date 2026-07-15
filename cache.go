@@ -170,7 +170,12 @@ func hashFiles(workDir string, patterns []string) (string, error) {
 			continue
 		}
 
-		fmt.Fprintf(h, "%s:%d:%d:", f, info.Size(), info.ModTime().UnixNano())
+		rel, err := filepath.Rel(workDir, f)
+		if err != nil {
+			return "", err
+		}
+		
+		fmt.Fprintf(h, "%s:%d:%d:", filepath.ToSlash(rel), info.Size(), info.ModTime().UnixNano())
 	}
 
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
