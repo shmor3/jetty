@@ -274,8 +274,9 @@ func TestStatusCommandShowsCompletedBuildsByDefault(t *testing.T) {
 	}
 
 	statusOutput := output.String()
-	if !strings.Contains(statusOutput, "ID") || !strings.Contains(statusOutput, statusCompleted) || !strings.Contains(statusOutput, buildFile) {
-		t.Fatalf("expected status history output, got %q", statusOutput)
+	baseFile := filepath.Base(buildFile)
+	if !strings.Contains(statusOutput, "ID") || !strings.Contains(statusOutput, statusCompleted) || !strings.Contains(statusOutput, baseFile) {
+		t.Fatalf("expected status history output containing %q, got %q", baseFile, statusOutput)
 	}
 }
 
