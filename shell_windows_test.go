@@ -8,7 +8,7 @@ import (
 func TestShellCommand(t *testing.T) {
 	ctx := context.Background()
 	cmd := shellCommand(ctx, "echo hello")
-	
+
 	// Process is nil before starting
 	if err := cmd.Cancel(); err != nil {
 		t.Errorf("expected Cancel to succeed when Process is nil, got %v", err)
@@ -18,7 +18,7 @@ func TestShellCommand(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start cmd: %v", err)
 	}
-	
+
 	// Cancel the process
 	err := cmd.Cancel()
 	if err != nil {

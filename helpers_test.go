@@ -140,7 +140,7 @@ func TestAppendToFile(t *testing.T) {
 	if string(content) != "hello world" {
 		t.Errorf("expected hello world, got %s", string(content))
 	}
-	
+
 	// OpenFile fails
 	err = appendToFile(dir, "fail")
 	if err == nil {

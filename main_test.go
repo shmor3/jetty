@@ -63,7 +63,7 @@ func TestShowCommandHelp(t *testing.T) {
 func TestHandleSubcommands(t *testing.T) {
 	var runCalled bool
 	var runArgs []string
-	
+
 	commands["testcmd"] = Command{
 		Name: "testcmd",
 		Run: func(ctx context.Context, args []string) error {
@@ -101,7 +101,7 @@ func TestHandleSubcommands(t *testing.T) {
 	if !runCalled {
 		t.Fatal("expected default command to run")
 	}
-	
+
 	// Test unknown command
 	err = handleSubcommands(ctx, []string{"unknowncmd"})
 	if err == nil {
@@ -176,7 +176,7 @@ func TestRegisteredCommands(t *testing.T) {
 	if err != nil {
 		t.Errorf("validate command failed: %v", err)
 	}
-	
+
 	// Test build command
 	err = commands["build"].Run(ctx, []string{dummyJetty})
 	if err != nil {

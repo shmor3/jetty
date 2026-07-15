@@ -65,16 +65,16 @@ type Job struct {
 }
 
 type BuildState struct {
-	Context    context.Context
-	FileName   string
-	BaseDir    string
-	WorkDir    string
-	BuildID    string
-	WorkerNode string
-	Args       map[string]string
-	Env        map[string]string
-	Boxes      map[string]BoxInfo
-	DefaultBox string
+	Context         context.Context
+	FileName        string
+	BaseDir         string
+	WorkDir         string
+	BuildID         string
+	WorkerNode      string
+	Args            map[string]string
+	Env             map[string]string
+	Boxes           map[string]BoxInfo
+	DefaultBox      string
 	ResultChan      chan<- string
 	Cancel          context.CancelFunc
 	Depth           int
@@ -352,13 +352,13 @@ func lockStatusStore() (func(), error) {
 		return nil, fmt.Errorf("failed to create lock directory %s: %w", stateDir, err)
 	}
 	_ = hideFile(stateDir)
-	
+
 	fileLock := flock.New(lockPath)
 	locked, err := fileLock.TryLock()
 	if err != nil {
 		return nil, fmt.Errorf("failed to check lock status: %w", err)
 	}
-	
+
 	if !locked {
 		logger.Printf("Waiting for lock on %s...", lockPath)
 		for i := 0; i < 50; i++ {
@@ -411,13 +411,13 @@ func saveBuildInfo(buildInfo BuildInfo) error {
 func readBuildInfos() ([]BuildInfo, error) {
 	statusStoreMu.Lock()
 	defer statusStoreMu.Unlock()
-	
+
 	unlock, err := lockStatusStore()
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
-	
+
 	return readBuildInfosLocked()
 }
 
