@@ -16,8 +16,10 @@ func shellCommand(ctx context.Context, script string) *exec.Cmd {
 		if cmd.Process == nil {
 			return nil
 		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		// Send SIGTERM to the entire process group to allow graceful shutdown
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	}
-	cmd.WaitDelay = 2 * time.Second
+	// Wait 5 seconds before Go forcibly sends SIGKILL to the main process
+	cmd.WaitDelay = 5 * time.Second
 	return cmd
 }
