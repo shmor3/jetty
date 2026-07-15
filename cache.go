@@ -41,7 +41,7 @@ func lockCacheStore() (func(), error) {
 			return nil, fmt.Errorf("timeout waiting for in-memory cache lock")
 		}
 	}
-	
+
 	lockPath := cacheStorePath() + ".lock"
 	stateDir := filepath.Dir(lockPath)
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
@@ -178,7 +178,7 @@ func hashFiles(workDir string, patterns []string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		
+
 		fmt.Fprintf(h, "%s:%d:%d:", filepath.ToSlash(rel), info.Size(), info.ModTime().UnixNano())
 	}
 
@@ -237,7 +237,7 @@ func checkCache(state *BuildState, inst Instruction) (bool, error) {
 	if err != nil || currentOutsHash != entry.Outputs["hash"] {
 		return false, nil
 	}
-	
+
 	// If the expected outputs are missing, NEVER hit the cache. We must run to produce them.
 	// Wait, if they were missing when cached, we could hit it, but it's safer to always rerun if outputs are unexpectedly missing.
 	// We'll let it hit if entry.Outputs["hash"] is also "missing", which means the command consistently produces no outputs.

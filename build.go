@@ -100,7 +100,7 @@ func build(ctx context.Context, fileName string, buildID string, workerNode stri
 	})
 }
 
-func processBuild(job Job) error {
+func processBuild(job Job) (err error) {
 	if job.ResultChan != nil {
 		defer close(job.ResultChan)
 	}
@@ -142,9 +142,13 @@ func processBuild(job Job) error {
 
 	var buildErr error
 	defer func() {
-		r := recover()
-		if r != nil {
+		if r := recover(); r != nil {
+			// Convert a panic into a Failed build and a returned error rather
+			// than re-panicking, which would crash the whole CLI instead of
+			// reporting the failure cleanly.
 			buildErr = fmt.Errorf("panic: %v", r)
+			err = fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
+			sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 		}
 		buildInfo.EndTime = time.Now()
 		if buildErr != nil {
@@ -154,9 +158,6 @@ func processBuild(job Job) error {
 			buildInfo.Status = statusCompleted
 		}
 		publishBuildInfo(job.Context, job.BuildInfoChan, buildInfo)
-		if r != nil {
-			panic(r)
-		}
 	}()
 
 	instructions, err := parseFile(absFileName)
@@ -207,6 +208,10 @@ func processBuild(job Job) error {
 
 func executeInstructions(state *BuildState, instructions []Instruction) error {
 	var wg sync.WaitGroup
+	// Ensure async workers are drained even if a synchronous instruction panics,
+	// so processBuild does not close the result channel while a worker still
+	// writes to it.
+	defer wg.Wait()
 	errChan := make(chan error, len(instructions))
 	var cmdInstruction *Instruction
 	var syncErr error
@@ -233,16 +238,23 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 			state.PendingDeps = nil
 			state.PendingOuts = nil
 			state.CurrentCacheKey = ""
-			
+
 			wg.Add(1)
 			go func(instruction Instruction, instructionNumber int, instructionState *BuildState) {
 				defer wg.Done()
-				select {
-				case asyncSemaphore <- struct{}{}:
-					defer func() { <-asyncSemaphore }()
-				case <-instructionState.Context.Done():
-					errChan <- instructionState.Context.Err()
-					return
+				// SUB mostly waits on its own (already-throttled) child
+				// instructions rather than doing CPU-bound work. Holding a
+				// global semaphore slot across a nested build would let async
+				// SUBs starve their own children of slots and stall the build,
+				// so only leaf/CPU-bound directives consume a slot.
+				if instruction.Directive != "SUB" {
+					select {
+					case asyncSemaphore <- struct{}{}:
+						defer func() { <-asyncSemaphore }()
+					case <-instructionState.Context.Done():
+						errChan <- instructionState.Context.Err()
+						return
+					}
 				}
 				if err := executeInstruction(instructionState, instruction); err != nil {
 					errChan <- fmt.Errorf("(%d/%d) line %d [%s%s %s]: %w", instructionNumber, len(instructions), instruction.Line, instruction.Symbol, instruction.Directive, instruction.Args, err)
@@ -324,17 +336,17 @@ func cloneBoxMap(source map[string]BoxInfo) map[string]BoxInfo {
 
 func (state *BuildState) snapshot() *BuildState {
 	return &BuildState{
-		Context:    state.Context,
-		FileName:   state.FileName,
-		BaseDir:    state.BaseDir,
-		WorkDir:    state.WorkDir,
-		BuildID:    state.BuildID,
-		WorkerNode: state.WorkerNode,
-		Args:       cloneStringMap(state.Args),
-		Env:        cloneStringMap(state.Env),
-		Boxes:      cloneBoxMap(state.Boxes),
-		DefaultBox: state.DefaultBox,
-		ResultChan: state.ResultChan,
+		Context:         state.Context,
+		FileName:        state.FileName,
+		BaseDir:         state.BaseDir,
+		WorkDir:         state.WorkDir,
+		BuildID:         state.BuildID,
+		WorkerNode:      state.WorkerNode,
+		Args:            cloneStringMap(state.Args),
+		Env:             cloneStringMap(state.Env),
+		Boxes:           cloneBoxMap(state.Boxes),
+		DefaultBox:      state.DefaultBox,
+		ResultChan:      state.ResultChan,
 		Cancel:          state.Cancel,
 		Depth:           state.Depth,
 		PendingDeps:     append([]string(nil), state.PendingDeps...),

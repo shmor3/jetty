@@ -48,6 +48,9 @@ func registeredCommands() {
 				return fmt.Errorf("%w: clean does not accept arguments", ErrInvalidInput)
 			}
 			stateDir := filepath.Dir(statusStorePath())
+			if isUnsafeCleanTarget(stateDir) {
+				return fmt.Errorf("%w: refusing to remove state directory %q; point %s at a dedicated directory", ErrInvalidInput, stateDir, jettyStateDirEnv)
+			}
 			if err := os.RemoveAll(stateDir); err != nil {
 				return fmt.Errorf("failed to clean state directory: %w", err)
 			}
@@ -90,12 +93,12 @@ func registeredCommands() {
 		Usage:       "ps [-a] [-f filter]",
 		Run:         runStatusCommand("ps", false),
 		MinArgs:     0,
-		MaxArgs:     3,
+		MaxArgs:     0,
 		Flags: func() *flag.FlagSet {
 			fs := flag.NewFlagSet("ps", flag.ContinueOnError)
 			fs.Bool("a", false, "Show all builds")
 			fs.Bool("active", false, "Show only active builds")
-			fs.String("f", "", "Filter builds")
+			fs.String("f", "", "Filter builds, e.g. id=buildid, status=Failed, worker=local, file=Jettyfile")
 			return fs
 		}(),
 	})
@@ -105,12 +108,12 @@ func registeredCommands() {
 		Usage:       "status [--active] [-f filter]",
 		Run:         runStatusCommand("status", true),
 		MinArgs:     0,
-		MaxArgs:     3,
+		MaxArgs:     0,
 		Flags: func() *flag.FlagSet {
 			fs := flag.NewFlagSet("status", flag.ContinueOnError)
 			fs.Bool("a", false, "Show all builds")
 			fs.Bool("active", false, "Show only active builds")
-			fs.String("f", "", "Filter builds")
+			fs.String("f", "", "Filter builds, e.g. id=buildid, status=Failed, worker=local, file=Jettyfile")
 			return fs
 		}(),
 	})
@@ -209,13 +212,38 @@ func registeredCommands() {
 			return nil
 		},
 		MinArgs: 0,
-		MaxArgs: 2,
+		// build parses and validates its own flags/positional file in Run, so
+		// no upper bound is enforced here (flag tokens would otherwise count as
+		// positional arguments and reject documented flag combinations).
+		MaxArgs: 0,
 		Flags: func() *flag.FlagSet {
 			fs := flag.NewFlagSet("build", flag.ContinueOnError)
 			fs.String("f", "", "Specify the build file")
+			fs.String("env-file", "", "Specify an environment variable file to load")
 			return fs
 		}(),
 	})
+}
+
+// isUnsafeCleanTarget reports whether removing dir would be dangerous, i.e. it
+// resolves to the filesystem root, the user's home directory, or the current
+// working directory rather than a dedicated Jetty state directory.
+func isUnsafeCleanTarget(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return true
+	}
+	abs = filepath.Clean(abs)
+	if abs == string(filepath.Separator) {
+		return true
+	}
+	if home, err := os.UserHomeDir(); err == nil && abs == filepath.Clean(home) {
+		return true
+	}
+	if wd, err := os.Getwd(); err == nil && abs == filepath.Clean(wd) {
+		return true
+	}
+	return false
 }
 
 func runStatusCommand(name string, defaultAll bool) func(context.Context, []string) error {
