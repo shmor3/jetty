@@ -211,9 +211,7 @@ func checkCache(state *BuildState, inst Instruction) (bool, error) {
 	}
 
 	keyHash := sha256.New()
-	// Key on the fully expanded command so an ARG/ENV change that alters the
-	// actual command invalidates the cache (the raw inst.Args would not).
-	fmt.Fprintf(keyHash, "%s:%s:%s", inst.Directive, inst.Symbol, state.expand(inst.Args))
+	fmt.Fprintf(keyHash, "%s:%s:%s", inst.Directive, inst.Symbol, inst.Args)
 	fmt.Fprintf(keyHash, ":%s", depsHash)
 
 	var envKeys []string
@@ -223,6 +221,21 @@ func checkCache(state *BuildState, inst Instruction) (bool, error) {
 	sort.Strings(envKeys)
 	for _, k := range envKeys {
 		fmt.Fprintf(keyHash, ":%s=%s", k, state.Env[k])
+	}
+
+	// Fold in build ARGs so a change to an ARG referenced by the command
+	// invalidates the cache. Exclude the runtime-injected identifiers, which
+	// are unique per run and would otherwise defeat caching entirely.
+	var argKeys []string
+	for k := range state.Args {
+		if k == "BUILD_ID" || k == "WORKER_NODE" {
+			continue
+		}
+		argKeys = append(argKeys, k)
+	}
+	sort.Strings(argKeys)
+	for _, k := range argKeys {
+		fmt.Fprintf(keyHash, ":%s=%s", k, state.Args[k])
 	}
 
 	state.CurrentCacheKey = fmt.Sprintf("%x", keyHash.Sum(nil))
