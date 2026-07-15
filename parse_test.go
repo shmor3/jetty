@@ -114,35 +114,28 @@ func TestParseFlags(t *testing.T) {
 		wantHelp    bool
 		wantVersion bool
 		wantVerbose bool
-		wantErr     bool
 	}{
-		{"no flags", []string{"jetty"}, false, false, false, false},
-		{"help flag", []string{"jetty", "--help"}, true, false, false, false},
-		{"short help flag", []string{"jetty", "-h"}, true, false, false, false},
-		{"version flag", []string{"jetty", "--version"}, false, true, false, false},
-		{"verbose flag", []string{"jetty", "--verbose"}, false, false, true, false},
-		{"short verbose flag", []string{"jetty", "-v"}, false, false, true, false},
-		{"invalid flag", []string{"jetty", "--invalid"}, false, false, false, false},
+		{"no flags", []string{"jetty"}, false, false, false},
+		{"help flag", []string{"jetty", "--help"}, true, false, false},
+		{"short help flag", []string{"jetty", "-h"}, true, false, false},
+		{"version flag", []string{"jetty", "--version"}, false, true, false},
+		{"verbose flag", []string{"jetty", "--verbose"}, false, false, true},
+		{"short verbose flag", []string{"jetty", "-v"}, false, false, true},
+		{"invalid flag", []string{"jetty", "--invalid"}, false, false, false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			os.Args = tc.args
-			config, err := parseFlags()
-			if (err != nil) != tc.wantErr {
-				t.Errorf("parseFlags() error = %v, wantErr %v", err, tc.wantErr)
-				return
+			config := parseFlags()
+			if config.Help != tc.wantHelp {
+				t.Errorf("parseFlags() Help = %v, want %v", config.Help, tc.wantHelp)
 			}
-			if err == nil {
-				if config.Help != tc.wantHelp {
-					t.Errorf("parseFlags() Help = %v, want %v", config.Help, tc.wantHelp)
-				}
-				if config.Version != tc.wantVersion {
-					t.Errorf("parseFlags() Version = %v, want %v", config.Version, tc.wantVersion)
-				}
-				if config.Verbose != tc.wantVerbose {
-					t.Errorf("parseFlags() Verbose = %v, want %v", config.Verbose, tc.wantVerbose)
-				}
+			if config.Version != tc.wantVersion {
+				t.Errorf("parseFlags() Version = %v, want %v", config.Version, tc.wantVersion)
+			}
+			if config.Verbose != tc.wantVerbose {
+				t.Errorf("parseFlags() Verbose = %v, want %v", config.Verbose, tc.wantVerbose)
 			}
 		})
 	}

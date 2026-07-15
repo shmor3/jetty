@@ -81,7 +81,7 @@ func TestPrintBuildInfos(t *testing.T) {
 }
 
 func TestRegisteredCommandsEdges(t *testing.T) {
-	registeredCommands()
+	registerCommands()
 
 	// Test init with args
 	err := commands["init"].Run(context.Background(), []string{"arg"})

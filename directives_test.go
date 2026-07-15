@@ -7,7 +7,19 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/ory/dockertest/v3"
 )
+
+// dockerAvailable reports whether a reachable Docker daemon is present, so
+// container-backed tests can be skipped rather than hard-failing when it isn't.
+func dockerAvailable() bool {
+	pool, err := dockertest.NewPool("")
+	if err != nil {
+		return false
+	}
+	return pool.Client.Ping() == nil
+}
 
 func TestParseGithubImport(t *testing.T) {
 	tests := []struct {
@@ -72,9 +84,10 @@ func TestExecuteBoxAndUse(t *testing.T) {
 		t.Error("expected error for missing command in USE")
 	}
 
-	// Only run if docker is available
-	if os.Getenv("CI") == "" {
-		state.WorkDir = "/tmp/workspace"
+	// Run the real container path only with a local Docker daemon (skipped in
+	// CI to avoid slow image pulls, and when Docker is unavailable).
+	if os.Getenv("CI") == "" && dockerAvailable() {
+		state.WorkDir = t.TempDir()
 		err = executeUse(state, "mybox echo 'hello'")
 		if err != nil {
 			t.Errorf("executeUse failed: %v", err)
@@ -160,12 +173,13 @@ func TestExecutePlugin(t *testing.T) {
 }
 
 func TestExecInContainer(t *testing.T) {
-	// Only run if docker is available
-	if os.Getenv("CI") != "" {
-		t.Skip("Skipping docker test in CI")
+	// Requires a local Docker daemon; skip in CI (avoid slow pulls) and when
+	// Docker is unavailable rather than hard-failing.
+	if os.Getenv("CI") != "" || !dockerAvailable() {
+		t.Skip("requires a local Docker daemon")
 	}
 
-	workDir := "/tmp/workspace"
+	workDir := t.TempDir()
 
 	state := &BuildState{
 		Context:    context.Background(),
