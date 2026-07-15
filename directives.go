@@ -325,6 +325,9 @@ func executeSubBuild(state *BuildState, args string) error {
 		InitialArgs:   state.Args,
 		InitialEnv:    state.Env,
 		Depth:         state.Depth + 1,
+		// A remote Jettyfile lives in a shared temp dir; do not auto-load a
+		// .env from there (an attacker on a multi-user host could plant one).
+		SkipDefaultEnv: githubURL != "",
 	})
 	wg.Wait()
 	if err != nil {
@@ -373,11 +376,15 @@ func executeUse(state *BuildState, args string) error {
 	}
 
 	boxName := state.DefaultBox
-	command := strings.TrimSpace(args)
+	trimmedArgs := strings.TrimSpace(args)
+	command := trimmedArgs
 	candidateBoxName := state.expand(parts[0])
-	if _, ok := state.Boxes[candidateBoxName]; ok {
+	// Only treat the first token as a box name when the raw args literally begin
+	// with it; otherwise (e.g. a quoted token) TrimPrefix would fail to strip it
+	// and leak the box name into the command run in the container.
+	if _, ok := state.Boxes[candidateBoxName]; ok && strings.HasPrefix(trimmedArgs, parts[0]) {
 		boxName = candidateBoxName
-		command = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(args), parts[0]))
+		command = strings.TrimSpace(strings.TrimPrefix(trimmedArgs, parts[0]))
 	}
 	if boxName == "" {
 		return fmt.Errorf("USE requires a known box name when no FRM default is configured")
@@ -565,7 +572,7 @@ func (state *BuildState) commandEnv() []string {
 	return env
 }
 
-func (state *BuildState) log(format string, v ...interface{}) {
+func (state *BuildState) log(format string, v ...any) {
 	sendResult(state.Context, state.ResultChan, fmt.Sprintf(format, v...))
 }
 
@@ -582,7 +589,7 @@ func (state *BuildState) expand(value string) string {
 }
 
 func sprintfExpanded(state *BuildState, format string, values []string) string {
-	expanded := make([]interface{}, len(values))
+	expanded := make([]any, len(values))
 	for i, value := range values {
 		expanded[i] = state.expand(value)
 	}
