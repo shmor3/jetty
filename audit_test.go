@@ -180,6 +180,73 @@ func TestBuildCacheSkipsUnchangedStep(t *testing.T) {
 	}
 }
 
+func TestCopyDirPreservesSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "real.txt"), []byte("hi"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real.txt", filepath.Join(src, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "copy")
+	if err := copyDir(context.Background(), src, dst); err != nil {
+		t.Fatalf("copyDir must not fail on a tree containing a symlink: %v", err)
+	}
+	fi, err := os.Lstat(filepath.Join(dst, "link.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("expected the copied entry to remain a symlink")
+	}
+	assertFileContent(t, filepath.Join(dst, "real.txt"), "hi")
+}
+
+func TestCopyDirReadOnlySource(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory write permissions")
+	}
+	src := t.TempDir()
+	sub := filepath.Join(src, "ro")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "f.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sub, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sub, 0755) })
+	dst := filepath.Join(t.TempDir(), "copy")
+	if err := copyDir(context.Background(), src, dst); err != nil {
+		t.Fatalf("copyDir must handle a read-only source directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dst, "ro"), 0755) })
+	assertFileContent(t, filepath.Join(dst, "ro", "f.txt"), "x")
+}
+
+func TestCopyFileRemovesPartialOnError(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("relies on reading a directory fd returning an error")
+	}
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "srcdir")
+	if err := os.Mkdir(srcDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "out", "dst.txt")
+	if err := copyFile(context.Background(), srcDir, dst); err == nil {
+		t.Fatal("expected copyFile to fail when the source is a directory")
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("expected the partial destination to be removed, stat err: %v", err)
+	}
+}
+
 // TestBuildCacheInvalidatesOnArgChange verifies that changing an ARG referenced
 // by a cached command invalidates the cache and re-runs the step.
 func TestBuildCacheInvalidatesOnArgChange(t *testing.T) {
