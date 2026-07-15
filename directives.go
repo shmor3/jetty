@@ -149,19 +149,49 @@ func executeCopy(state *BuildState, args string) error {
 	return nil
 }
 
+func parseGithubImport(rawArg string) (string, error) {
+	if !strings.HasPrefix(rawArg, "github.com/") {
+		return "", nil
+	}
+	rest := strings.TrimPrefix(rawArg, "github.com/")
+	parts := strings.Split(rest, "/")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("invalid github import syntax: %s", rawArg)
+	}
+	owner := parts[0]
+	repoPart := parts[1]
+	ref := "main"
+	repo := repoPart
+	if strings.Contains(repoPart, "@") {
+		repoSplit := strings.SplitN(repoPart, "@", 2)
+		repo = repoSplit[0]
+		ref = repoSplit[1]
+	}
+	path := "Jettyfile"
+	if len(parts) > 2 {
+		path = strings.Join(parts[2:], "/")
+	}
+	return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", owner, repo, ref, path), nil
+}
+
 func executeSubBuild(state *BuildState, args string) error {
 	rawArg := strings.TrimSpace(state.expand(args))
 	var referencedFile string
 
-	if strings.HasPrefix(rawArg, "http://") || strings.HasPrefix(rawArg, "https://") {
-		state.log("SUB: Downloading %s", rawArg)
-		resp, err := http.Get(rawArg)
+	githubURL, err := parseGithubImport(rawArg)
+	if err != nil {
+		return err
+	}
+
+	if githubURL != "" {
+		state.log("SUB: Fetching %s", rawArg)
+		resp, err := http.Get(githubURL)
 		if err != nil {
 			return fmt.Errorf("failed to fetch remote Jettyfile: %w", err)
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("failed to fetch remote Jettyfile: HTTP %s", resp.Status)
+			return fmt.Errorf("failed to fetch remote Jettyfile: HTTP %s (url: %s)", resp.Status, githubURL)
 		}
 		tmpFile, err := os.CreateTemp("", "jettyfile-*")
 		if err != nil {
@@ -203,7 +233,7 @@ func executeSubBuild(state *BuildState, args string) error {
 		}
 	}()
 
-	err := processBuild(Job{
+	err = processBuild(Job{
 		BuildID:       subBuildID,
 		FileName:      referencedFile,
 		ResultChan:    subResultChan,
