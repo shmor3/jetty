@@ -116,12 +116,12 @@ RUN echo "This command \
 | `RUN command` | Executes a shell command on the host. |
 | `*RUN command` | Executes a shell command *asynchronously*. |
 | `CMD command` | Runs once after all other instructions (and background tasks) are finished. Only one allowed per file. |
-| `DIR path` | Creates a directory relative to the current Jettyfile context. |
-| `WDR path` | Changes the context working directory for all subsequent directives. |
-| `CPY src dest` | Copies a file or directory. |
+| `DIR path` | Creates a directory recursively (`mkdir -p`) within the build workspace. |
+| `WDR path` | Changes the current working directory for subsequent instructions. |
+| `CPY src dest` | Copies a file or directory from `src` to `dest`. |
 | `*CPY src dest` | Copies a file or directory *asynchronously*. |
-| `SUB file` | Invokes a nested Jettyfile build synchronously. The sub-build inherits arguments and environment variables. |
-| `*SUB file` | Invokes a nested Jettyfile build *asynchronously*. |
+| `SUB file_or_url` | Delegates execution to another Jettyfile locally or via HTTP/HTTPS URL. |
+| `*SUB file_or_url` | Delegates execution to another Jettyfile *asynchronously*. |
 | `FMT format args...` | Formats a string to standard output. |
 | `^FMT file format args...` | Appends a formatted string to a target file. |
 | `$FMT NAME format args...` | Formats a string and assigns it to an environment variable (`$NAME`). |
@@ -136,7 +136,7 @@ RUN echo "This command \
 ## Status and Configuration
 
 Run `jetty` or `jetty status` to view a tabular history of completed and active builds across your machine.
-- `jetty build [file]`: Runs a Jettyfile build.
+- `jetty build [-f file] [--env-file file] [file]`: Runs a Jettyfile build. Optionally specify an explicit .env file.
 - `jetty validate [file]`: Validates the syntax of a Jettyfile without executing it.
 - `jetty ps -a`: Lists all builds with truncated IDs and execution metadata.
 - `jetty ps`: Lists only actively running asynchronous builds.

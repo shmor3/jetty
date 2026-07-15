@@ -416,7 +416,7 @@ func runBuildForTest(t *testing.T, fileName string) ([]string, []BuildInfo, erro
 	buildInfoChan := make(chan BuildInfo)
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- build(ctx, fileName, "test-build", "test-worker", resultChan, buildInfoChan)
+		errChan <- build(ctx, fileName, "test-build", "test-worker", resultChan, buildInfoChan, "")
 	}()
 
 	var output []string
