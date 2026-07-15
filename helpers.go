@@ -71,6 +71,11 @@ func copyDir(ctx context.Context, src, dst string) error {
 	if err := os.MkdirAll(dst, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory %s: %w", dst, err)
 	}
+	// MkdirAll is a no-op if dst already exists (e.g. a prior copy restored a
+	// read-only source mode); force it writable so this copy can write children.
+	if err := os.Chmod(dst, 0755); err != nil {
+		return fmt.Errorf("failed to prepare destination directory %s: %w", dst, err)
+	}
 	entries, err := os.ReadDir(src)
 	if err != nil {
 		return fmt.Errorf("failed to read source directory %s: %w", src, err)

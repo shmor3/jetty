@@ -174,7 +174,10 @@ func hashFiles(workDir string, patterns []string) (string, error) {
 
 		rel, err := filepath.Rel(workDir, f)
 		if err != nil {
-			return "", err
+			// An absolute pattern can match a file that is not relatable to
+			// workDir (e.g. a different Windows volume); hash its absolute path
+			// rather than failing the build.
+			rel = f
 		}
 
 		// Hash the relative path plus the file's actual contents so the cache

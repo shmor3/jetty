@@ -229,6 +229,41 @@ func TestCopyDirReadOnlySource(t *testing.T) {
 	assertFileContent(t, filepath.Join(dst, "ro", "f.txt"), "x")
 }
 
+func TestCopyDirReCopyIntoReadOnlyDest(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink/permission semantics differ on Windows")
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory write permissions")
+	}
+	src := t.TempDir()
+	sub := filepath.Join(src, "ro")
+	if err := os.Mkdir(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "real.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real.txt", filepath.Join(sub, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sub, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sub, 0755) })
+	dst := filepath.Join(t.TempDir(), "copy")
+	if err := copyDir(context.Background(), src, dst); err != nil {
+		t.Fatalf("first copy failed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dst, "ro"), 0755) })
+	// Re-copying into the same (now read-only) destination must also succeed,
+	// including replacing the symlink (which requires directory write access).
+	if err := copyDir(context.Background(), src, dst); err != nil {
+		t.Fatalf("re-copy into a read-only destination failed: %v", err)
+	}
+	assertFileContent(t, filepath.Join(dst, "ro", "real.txt"), "x")
+}
+
 func TestCopyFileRemovesPartialOnError(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("relies on reading a directory fd returning an error")
