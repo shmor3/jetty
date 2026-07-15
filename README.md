@@ -9,7 +9,7 @@ Built with extreme multi-platform reliability in mind, Jetty is designed to be a
 ## Why Jetty?
 
 - **Simple & Familiar:** The `Jettyfile` syntax is incredibly similar to Dockerfiles, making it immediately intuitive.
-- **Async by Design:** Prepend `*` to any instruction (like `*RUN` or `*SUB`) and Jetty immediately forks it to the background, waiting for it to finish gracefully before evaluating the final `CMD`.
+- **Async by Design:** Prepend `*` to any instruction (like `*RUN`, `*SUB`, `*USE`, or `*JET`) and Jetty immediately forks it to the background, waiting for it to finish gracefully before evaluating the final `CMD`.
 - **First-Class Docker Support:** `USE` commands transparently route execution into lightweight Docker containers while automatically mounting your local workspace.
 - **Cross-Platform:** Out of the box, Jetty handles path conversion (`\` vs `/`), carriage returns (`\r\n`), native Windows environments, and proper Unix process grouping.
 - **Build Isolation:** Working directories and environments are scoped tightly per-build to prevent cascading pollution.
@@ -128,7 +128,9 @@ RUN echo "This command \
 | `FRM image[:tag]` | Sets the default Docker image for subsequent `USE` directives. |
 | `BOX name image[:tag]` | Aliases a Docker image to a simpler name. |
 | `USE [box] command` | Executes a command inside a Docker container (mounting the host workspace). |
+| `*USE [box] command` | Executes a command inside a Docker container *asynchronously*. |
 | `JET plugin [args...]` | Executes a Jetty plugin from the local `plugins/` directory or an absolute path. |
+| `*JET plugin [args...]` | Executes a Jetty plugin *asynchronously*. |
 
 ## Status and Configuration
 
