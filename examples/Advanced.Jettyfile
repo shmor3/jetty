@@ -9,11 +9,10 @@ $FMT BUILD_TS "%s" 2026-07-14
 # Async sub-builds run other Jettyfiles in parallel!
 *SUB Basic.Jettyfile
 
-# Create a mock plugin for demonstration purposes
-^FMT temp_workspace/mock_plugin.sh "echo \"Plugin execution: success\""
-RUN chmod +x temp_workspace/mock_plugin.sh
+# Compile the mock plugin (for cross-platform execution)
+RUN go build -o temp_workspace/ plugins/mock_plugin.go
 
 # Run the plugin via JET. (Normally plugins are placed in the plugins/ directory)
-JET temp_workspace/mock_plugin.sh
+JET temp_workspace/mock_plugin
 
 CMD echo "Advanced build complete. Started at: $BUILD_TS"

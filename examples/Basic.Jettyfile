@@ -16,6 +16,6 @@ RUN echo "This is a long shell command \
           to show how Jetty parses it cleanly."
 
 # Do something asynchronously (Jetty will wait for this before CMD)
-*RUN sleep 1 && echo "Async task finished!"
+*RUN echo "Async task finished!"
 
 CMD cat greeting.txt && echo "Build complete. Check the build_output directory."
