@@ -12,7 +12,7 @@ Built with extreme multi-platform reliability in mind, Jetty is designed to be a
 - **Async by Design:** Prepend `*` to any instruction (like `*RUN`, `*SUB`, `*USE`, or `*JET`) and Jetty immediately forks it to the background, waiting for it to finish gracefully before evaluating the final `CMD`.
 - **First-Class Docker Support:** `USE` commands transparently route execution into lightweight Docker containers while automatically mounting your local workspace.
 - **Cross-Platform:** Out of the box, Jetty handles path conversion (`\` vs `/`), carriage returns (`\r\n`), native Windows environments, and proper Unix process grouping.
-- **Mission Critical:** Features fully autonomous execution timing telemetry and native graceful shutdown signals (`SIGTERM` / `os.Interrupt`) across process groups to ensure background processes exit cleanly on cancellation.
+- **Mission Critical:** Features fully autonomous execution timing telemetry, native graceful shutdown signals (`SIGTERM` / `os.Interrupt`) across process groups, and strict CPU-bound concurrency limits on background instructions to prevent orchestration deadlocks and resource exhaustion.
 - **Build Isolation:** Working directories and environments are scoped tightly per-build to prevent cascading pollution.
 
 ## Install
@@ -136,6 +136,8 @@ RUN echo "This command \
 ## Status and Configuration
 
 Run `jetty` or `jetty status` to view a tabular history of completed and active builds across your machine.
+- `jetty build [file]`: Runs a Jettyfile build.
+- `jetty validate [file]`: Validates the syntax of a Jettyfile without executing it.
 - `jetty ps -a`: Lists all builds with truncated IDs and execution metadata.
 - `jetty ps`: Lists only actively running asynchronous builds.
 - `jetty clean`: Automatically garbage-collects all status history and clears the local state directory.

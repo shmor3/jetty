@@ -114,6 +114,28 @@ func registeredCommands() {
 			return fs
 		}(),
 	})
+	registerCommand("validate", Command{
+		Name:        "validate",
+		Description: "Validate the syntax of a Jettyfile",
+		Usage:       "validate [filename]",
+		Run: func(ctx context.Context, args []string) error {
+			fileName := "Jettyfile"
+			if len(args) > 0 {
+				fileName = args[0]
+			}
+			if _, err := os.Stat(fileName); os.IsNotExist(err) {
+				return fmt.Errorf("file not found: %s", fileName)
+			}
+			instructions, err := parseFile(fileName)
+			if err != nil {
+				return fmt.Errorf("validation failed: %w", err)
+			}
+			logger.Printf("Successfully validated %s (%d instructions)", fileName, len(instructions))
+			return nil
+		},
+		MinArgs: 0,
+		MaxArgs: 1,
+	})
 	registerCommand("build", Command{
 		Name:        "build",
 		Description: "Run a new build",
