@@ -1,4 +1,4 @@
-module jetty
+module github.com/shmor3/jetty
 
 go 1.23
 
