@@ -1,0 +1,21 @@
+# Basic.Jettyfile
+# Demonstrates variables, directories, formatting, and commands.
+
+ARG NAME=World
+ENV GREETING=Hello
+
+DIR build_output
+WDR build_output
+
+# Write a formatted string to a file
+^FMT greeting.txt "%s %s!" $GREETING $NAME
+
+# Demonstrate multi-line commands
+RUN echo "This is a long shell command \
+          that spans multiple lines \
+          to show how Jetty parses it cleanly."
+
+# Do something asynchronously (Jetty will wait for this before CMD)
+*RUN sleep 1 && echo "Async task finished!"
+
+CMD cat greeting.txt && echo "Build complete. Check the build_output directory."

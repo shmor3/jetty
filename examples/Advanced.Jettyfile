@@ -1,0 +1,19 @@
+# Advanced.Jettyfile
+# Demonstrates dynamic formatting, async sub-builds, and plugin usage.
+
+DIR temp_workspace
+
+# Set an environment variable via formatting
+$FMT BUILD_TS "%s" 2026-07-14
+
+# Async sub-builds run other Jettyfiles in parallel!
+*SUB Basic.Jettyfile
+
+# Create a mock plugin for demonstration purposes
+^FMT temp_workspace/mock_plugin.sh "echo \"Plugin execution: success\""
+RUN chmod +x temp_workspace/mock_plugin.sh
+
+# Run the plugin via JET. (Normally plugins are placed in the plugins/ directory)
+JET temp_workspace/mock_plugin.sh
+
+CMD echo "Advanced build complete. Started at: $BUILD_TS"

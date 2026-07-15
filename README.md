@@ -1,17 +1,18 @@
 # Jetty
 
-Jetty is a local Jettyfile runner for small build and automation workflows. It executes shell commands, file operations, nested builds, and selected asynchronous steps while keeping build state isolated from the parent process.
+Jetty is a fast, lightweight, line-oriented build runner and task automation tool. It acts as a powerful alternative to complex Makefile setups, letting you orchestrate shell commands, nested builds, asynchronous execution, and Docker containers with a clean, Dockerfile-like syntax.
 
-Jettyfiles are trusted input. `RUN`, `CMD`, `USE`, and `JET` can execute commands on the host or in Docker containers, so do not run Jettyfiles from untrusted sources.
+Built with extreme multi-platform reliability in mind, Jetty is designed to be a mission-critical component in development workflows.
 
-## Features
+---
 
-- Line-oriented Jettyfile syntax with `ARG`, `ENV`, `RUN`, `CMD`, `DIR`, `CPY`, `WDR`, `SUB`, `FMT`, `FRM`, `BOX`, `USE`, and `JET`.
-- Asynchronous `*RUN`, `*CPY`, and `*SUB` steps. Jetty waits for async work before running the final `CMD`.
-- Per-build working directory and environment. `WDR` does not call `chdir` on the Jetty process.
-- Nested builds with paths resolved relative to the current Jettyfile working directory.
-- Build status snapshots in `.jetty/builds.json`, readable with `jetty ps`.
-- Optional Docker-backed execution with `FRM`/`BOX` and `USE`.
+## Why Jetty?
+
+- **Simple & Familiar:** The `Jettyfile` syntax is incredibly similar to Dockerfiles, making it immediately intuitive.
+- **Async by Design:** Prepend `*` to any instruction (like `*RUN` or `*SUB`) and Jetty immediately forks it to the background, waiting for it to finish gracefully before evaluating the final `CMD`.
+- **First-Class Docker Support:** `USE` commands transparently route execution into lightweight Docker containers while automatically mounting your local workspace.
+- **Cross-Platform:** Out of the box, Jetty handles path conversion (`\` vs `/`), carriage returns (`\r\n`), native Windows environments, and proper Unix process grouping.
+- **Build Isolation:** Working directories and environments are scoped tightly per-build to prevent cascading pollution.
 
 ## Install
 
@@ -19,99 +20,141 @@ Jettyfiles are trusted input. `RUN`, `CMD`, `USE`, and `JET` can execute command
 git clone https://github.com/shmor3/jetty.git
 cd jetty
 go build -o jetty .
+# Move 'jetty' to your system PATH
 ```
 
-## Usage
+## Quick Start
 
+Initialize a new project:
 ```bash
 jetty init
+```
+
+Run the build:
+```bash
 jetty build
-jetty build -f path/to/Jettyfile
-jetty status
-jetty status --active
-jetty status -f status=Failed
-jetty ps
+```
+
+Check the status of your current and historical builds:
+```bash
 jetty ps -a
 ```
 
-`jetty build` uses `Jettyfile` in the current directory unless a file is passed with `-f` or as a positional argument.
+## Anatomy of a Jettyfile
 
-`jetty status` reads `.jetty/builds.json` from the current directory by default and shows recorded build history. `jetty ps` shows active builds by default; use `jetty ps -a` for history. Set `JETTY_STATE_DIR` to write and read status from another directory. Set `JETTY_TIMEOUT` to configure the maximum execution time (defaults to 10m).
+Jetty reads instructions line by line. Line continuations (`\`) are supported exactly like shell scripting or Dockerfiles.
 
-## Jettyfile Example
+Here is a quick tour of what Jetty can do:
+
+### 1. Variables and Environment
 
 ```jetty
-ARG NAME=jetty
-ENV GREETING=hello
+ARG NAME=World
+ENV GREETING=Hello
 
-DIR build
-^FMT build/message.txt "%s %s" $GREETING $NAME
-
-*RUN echo async step
-SUB sub.Jettyfile
-
-CMD echo finished
+RUN echo "$GREETING $NAME!"
 ```
 
-## Directives
+### 2. Filesystem Ops
+
+```jetty
+# Create a directory safely
+DIR build_output
+
+# Change Jetty's build-local working directory (does not affect the parent shell)
+WDR build_output
+
+# Copy files locally. Append `*` to run the copy in the background!
+*CPY ../src ./src_backup
+```
+
+### 3. Docker Container Execution
+
+You don't need complex `docker run` scripts. Jetty abstracts it natively via `USE` and `BOX`.
+
+```jetty
+# Define an alias to a specific docker image
+BOX node node:18-alpine
+
+# Set a default fallback image
+FRM golang:1.20-alpine
+
+# Execute inside the Node container! Jetty mounts your host directory to /workspace inside the container.
+USE node npm install
+
+# Run a Go command using the fallback image
+USE go build -o my_app .
+```
+
+### 4. Advanced Formatting
+
+Jetty includes a built-in formatting engine (`FMT`) to generate dynamic configs without invoking `sed` or `awk`.
+
+```jetty
+# Write a formatted string directly to a file
+^FMT config.json "{ \"app\": \"%s\" }" $NAME
+
+# Store a formatted string directly into an environment variable!
+$FMT LOG_PREFIX "[%s] LOG:" $NAME
+```
+
+### 5. Multi-line Commands
+
+```jetty
+RUN echo "This command \
+          spans multiple lines \
+          and works perfectly."
+```
+
+## Core Directives
 
 | Directive | Description |
 | --- | --- |
-| `ARG KEY=value` | Defines a build argument. Jetty expands `$KEY` from arguments before running directives. |
-| `ENV KEY=value` | Defines an environment variable for later `RUN`, `CMD`, `USE`, and `JET` commands. |
-| `RUN command` | Runs a shell command in the current build working directory. |
-| `*RUN command` | Runs a shell command asynchronously. |
-| `CMD command` | Runs once after all other instructions and after async work completes. Only one `CMD` is allowed. |
-| `DIR path` | Creates a directory relative to the current build working directory. |
-| `WDR path` | Changes Jetty's build-local working directory for later directives. |
-| `CPY source destination` | Copies a file or directory. |
-| `*CPY source destination` | Copies a file or directory asynchronously. |
-| `SUB file` | Runs another Jettyfile synchronously. The sub-build inherits current args and environment. Maximum recursion depth is 50. |
-| `*SUB file` | Runs another Jettyfile asynchronously. |
-| `FMT format args...` | Formats a string and writes it to build output. |
-| `^FMT file format args...` | Appends a formatted string to a file. |
-| `$FMT NAME format args...` | Stores a formatted string in the build environment. |
-| `&FMT NAME format args...` | Stores a formatted string in build args. |
-| `FRM image[:tag]` | Sets the default Docker image for later `USE` directives. |
-| `BOX name image[:tag]` | Defines a named Docker image. `BOX name repository tag` is also supported. |
-| `USE [box] command` | Runs a command inside a Docker box. If no box is supplied, the `FRM` default is used. |
-| `JET plugin [args...]` | Executes a plugin from `plugins/plugin` relative to the current working directory, or from an explicit path. |
+| `ARG KEY=value` | Defines a build argument. Jetty expands `$KEY` dynamically during execution. |
+| `ENV KEY=value` | Defines a persistent environment variable scoped to the current build execution. |
+| `RUN command` | Executes a shell command on the host. |
+| `*RUN command` | Executes a shell command *asynchronously*. |
+| `CMD command` | Runs once after all other instructions (and background tasks) are finished. Only one allowed per file. |
+| `DIR path` | Creates a directory relative to the current Jettyfile context. |
+| `WDR path` | Changes the context working directory for all subsequent directives. |
+| `CPY src dest` | Copies a file or directory. |
+| `*CPY src dest` | Copies a file or directory *asynchronously*. |
+| `SUB file` | Invokes a nested Jettyfile build synchronously. The sub-build inherits arguments and environment variables. |
+| `*SUB file` | Invokes a nested Jettyfile build *asynchronously*. |
+| `FMT format args...` | Formats a string to standard output. |
+| `^FMT file format args...` | Appends a formatted string to a target file. |
+| `$FMT NAME format args...` | Formats a string and assigns it to an environment variable (`$NAME`). |
+| `&FMT NAME format args...` | Formats a string and assigns it to a build argument (`$NAME`). |
+| `FRM image[:tag]` | Sets the default Docker image for subsequent `USE` directives. |
+| `BOX name image[:tag]` | Aliases a Docker image to a simpler name. |
+| `USE [box] command` | Executes a command inside a Docker container (mounting the host workspace). |
+| `JET plugin [args...]` | Executes a Jetty plugin from the local `plugins/` directory or an absolute path. |
 
-`RUN` and `CMD` use `sh -c` on Unix. On Windows, Jetty uses `sh -c` when `sh` is available, otherwise it falls back to `cmd /C`.
+## Status and Configuration
 
-Argument and environment names must start with a letter or underscore and may contain only letters, numbers, and underscores. `CPY` refuses to copy a directory into itself or one of its descendants.
+Jetty maintains an internal history of executions in `.jetty/builds.json`.
 
-## Paths
+```bash
+# View active background builds
+jetty ps
 
-Relative paths are resolved from the directory containing the current Jettyfile. After `WDR`, relative paths resolve from the new build-local working directory. Jetty does not mutate the parent process working directory.
-
-## Status
-
-Builds write status records as JSON:
-
-```json
-[
-  {
-    "id": "1770000000000000000",
-    "status": "Completed",
-    "start_time": "2026-07-10T12:00:00Z",
-    "end_time": "2026-07-10T12:00:01Z",
-    "worker_node": "local",
-    "file_name": "/path/to/Jettyfile"
-  }
-]
+# View entire build history
+jetty status
 ```
 
-Use `jetty status` for build history, `jetty status --active` or `jetty ps` for active builds, and `jetty ps -a` for active and completed builds. Supported filters are `id=`, `status=`, `worker=`, and `file=`.
+**Environment Variables:**
+- `JETTY_STATE_DIR`: Overrides the default `.jetty` state storage location.
+- `JETTY_TIMEOUT`: Overrides the global 10-minute timeout limit (e.g. `export JETTY_TIMEOUT=30m`).
 
 ## Development
+
+Jetty is written in pure Go and tested heavily on Windows, Linux, and macOS.
 
 ```bash
 go test ./...
 go vet ./...
-gofmt -w .
+go build -o jetty .
 ```
 
 ## License
-
-This project is licensed under the [MIT License](LICENSE).
+MIT

@@ -1,0 +1,21 @@
+# Docker.Jettyfile
+# Demonstrates container-backed execution. Ensure Docker is running.
+
+# Define reusable Docker images
+BOX node node:18-alpine
+BOX python python:3.9-slim
+
+# Set a default image if USE is called without a box name
+FRM golang:1.20-alpine
+
+# The host directory is automatically mounted to /workspace in the container.
+USE node npm init -y
+USE node npm install lodash
+
+# Run a Python script directly
+USE python python -c "print('Hello from Python inside Docker!')"
+
+# Uses the default FRM (golang) to execute a command
+USE go version
+
+CMD echo "Docker tasks completed successfully."
