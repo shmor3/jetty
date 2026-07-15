@@ -120,8 +120,8 @@ RUN echo "This command \
 | `WDR path` | Changes the current working directory for subsequent instructions. |
 | `CPY src dest` | Copies a file or directory from `src` to `dest`. |
 | `*CPY src dest` | Copies a file or directory *asynchronously*. |
-| `SUB file_or_url` | Delegates execution to another Jettyfile locally or via HTTP/HTTPS URL. |
-| `*SUB file_or_url` | Delegates execution to another Jettyfile *asynchronously*. |
+| `SUB target` | Delegates execution to another Jettyfile locally or via GitHub import syntax (`github.com/owner/repo[@ref][/path]`). |
+| `*SUB target` | Delegates execution to another Jettyfile *asynchronously*. |
 | `FMT format args...` | Formats a string to standard output. |
 | `^FMT file format args...` | Appends a formatted string to a target file. |
 | `$FMT NAME format args...` | Formats a string and assigns it to an environment variable (`$NAME`). |
