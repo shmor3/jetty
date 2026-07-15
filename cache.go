@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/gofrs/flock"
 )
+
+var cacheStoreMu sync.Mutex
 
 type CacheEntry struct {
 	Outputs map[string]string `json:"outputs"`
@@ -25,9 +28,24 @@ func cacheStorePath() string {
 }
 
 func lockCacheStore() (func(), error) {
+	lockedInMem := cacheStoreMu.TryLock()
+	if !lockedInMem {
+		for i := 0; i < 50; i++ {
+			lockedInMem = cacheStoreMu.TryLock()
+			if lockedInMem {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if !lockedInMem {
+			return nil, fmt.Errorf("timeout waiting for in-memory cache lock")
+		}
+	}
+	
 	lockPath := cacheStorePath() + ".lock"
 	stateDir := filepath.Dir(lockPath)
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
+		cacheStoreMu.Unlock()
 		return nil, fmt.Errorf("failed to create cache lock directory: %w", err)
 	}
 	_ = hideFile(stateDir)
@@ -35,6 +53,7 @@ func lockCacheStore() (func(), error) {
 	fileLock := flock.New(lockPath)
 	locked, err := fileLock.TryLock()
 	if err != nil {
+		cacheStoreMu.Unlock()
 		return nil, fmt.Errorf("failed to check cache lock: %w", err)
 	}
 
@@ -48,6 +67,7 @@ func lockCacheStore() (func(), error) {
 			time.Sleep(100 * time.Millisecond)
 		}
 		if !locked {
+			cacheStoreMu.Unlock()
 			return nil, fmt.Errorf("timeout waiting for lock on %s", lockPath)
 		}
 	}
@@ -56,6 +76,7 @@ func lockCacheStore() (func(), error) {
 		if err := fileLock.Unlock(); err != nil {
 			logger.Printf("Warning: failed to unlock cache store: %v", err)
 		}
+		cacheStoreMu.Unlock()
 	}, nil
 }
 
@@ -106,12 +127,18 @@ func hashFiles(workDir string, patterns []string) (string, error) {
 				continue
 			}
 			if info.IsDir() {
-				filepath.Walk(match, func(path string, walkInfo os.FileInfo, walkErr error) error {
-					if walkErr == nil && !walkInfo.IsDir() {
+				walkErr := filepath.Walk(match, func(path string, walkInfo os.FileInfo, walkErr error) error {
+					if walkErr != nil {
+						return walkErr
+					}
+					if !walkInfo.IsDir() {
 						files = append(files, path)
 					}
 					return nil
 				})
+				if walkErr != nil {
+					return "", walkErr
+				}
 			} else {
 				files = append(files, match)
 			}
@@ -191,11 +218,14 @@ func checkCache(state *BuildState, inst Instruction) (bool, error) {
 	}
 
 	if len(state.PendingOuts) == 0 {
+		if entry.Outputs["hash"] == "empty" {
+			return true, nil
+		}
 		return false, nil
 	}
 
 	currentOutsHash, err := hashFiles(state.WorkDir, state.PendingOuts)
-	if err != nil || currentOutsHash == "empty" || currentOutsHash != entry.Outputs["hash"] {
+	if err != nil || currentOutsHash != entry.Outputs["hash"] {
 		return false, nil
 	}
 
