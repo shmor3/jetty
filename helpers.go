@@ -55,6 +55,9 @@ func copyDir(ctx context.Context, src, dst string) error {
 		return fmt.Errorf("failed to read source directory %s: %w", src, err)
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
 		if entry.IsDir() {
@@ -84,15 +87,19 @@ func appendToFile(filename, content string) error {
 }
 
 type lineWriter struct {
-	label string
-	state *BuildState
-	buf   []byte
-	mu    sync.Mutex
+	label    string
+	state    *BuildState
+	buf      []byte
+	mu       sync.Mutex
+	detached bool
 }
 
 func (w *lineWriter) Write(p []byte) (n int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.detached {
+		return len(p), nil
+	}
 	for _, b := range p {
 		if b == '\n' {
 			w.state.log("%s: %s", w.label, string(w.buf))
@@ -107,9 +114,22 @@ func (w *lineWriter) Write(p []byte) (n int, err error) {
 func (w *lineWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.detached {
+		return nil
+	}
 	if len(w.buf) > 0 {
 		w.state.log("%s: %s", w.label, string(w.buf))
 		w.buf = w.buf[:0]
 	}
 	return nil
+}
+
+// detach makes all subsequent Write/Close calls no-ops. It is used to sever an
+// abandoned writer (e.g. a container exec goroutine that outlived its build)
+// from the result channel so it cannot send after that channel is closed.
+func (w *lineWriter) detach() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.detached = true
+	w.buf = nil
 }

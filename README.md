@@ -9,11 +9,11 @@ Built with extreme multi-platform reliability in mind, Jetty is designed to be a
 ## Why Jetty?
 
 - **Simple & Familiar:** The `Jettyfile` syntax is incredibly similar to Dockerfiles, making it immediately intuitive.
-- **Async by Design:** Prepend `*` to any instruction (like `*RUN`, `*SUB`, `*USE`, or `*JET`) and Jetty immediately forks it to the background, waiting for it to finish gracefully before evaluating the final `CMD`.
+- **Async by Design:** Prepend `*` to any async-capable instruction (`*RUN`, `*CPY`, `*SUB`, `*USE`, or `*JET`) and Jetty immediately forks it to the background, waiting for it to finish gracefully before evaluating the final `CMD`.
 - **First-Class Docker Support:** `USE` commands transparently route execution into lightweight Docker containers while automatically mounting your local workspace.
 - **Cross-Platform:** Out of the box, Jetty handles path conversion (`\` vs `/`), carriage returns (`\r\n`), native Windows environments, and proper Unix process grouping.
-- **Mission Critical:** Features fully autonomous execution timing telemetry, native graceful shutdown signals (`SIGTERM` / `os.Interrupt`) across process groups, and strict CPU-bound concurrency limits on background instructions to prevent orchestration deadlocks and resource exhaustion.
-- **Build Isolation:** Working directories and environments are scoped tightly per-build to prevent cascading pollution.
+- **Mission Critical:** Features execution timing telemetry, native graceful shutdown signals (`SIGTERM` / `os.Interrupt`) across process groups, and a CPU-bound concurrency limit on background leaf instructions to bound parallel resource usage. Sub-builds are exempt from the limit so nested async builds cannot starve their own children.
+- **Build Isolation:** Working directories and environment variables are scoped per-build so sibling builds don't clobber each other's context. Note that directive paths (e.g. `CPY`, `WDR`, `^FMT`) are not sandboxed to the workspace — Jetty runs your instructions with your own permissions.
 
 ## Install
 
@@ -115,6 +115,8 @@ RUN echo "This command \
 | `ENV KEY=value` | Defines a persistent environment variable scoped to the current build execution. |
 | `RUN command` | Executes a shell command on the host. |
 | `*RUN command` | Executes a shell command *asynchronously*. |
+| `DEP path...` | Declares input files for the next cacheable step (`RUN`/`CPY`/`USE`). Their contents form the cache key. |
+| `OUT path...` | Declares the output files a cacheable step produces. When the `DEP` inputs are unchanged and the outputs still exist, the step is skipped and reported as `CACHED`. |
 | `CMD command` | Runs once after all other instructions (and background tasks) are finished. Only one allowed per file. |
 | `DIR path` | Creates a directory recursively (`mkdir -p`) within the build workspace. |
 | `WDR path` | Changes the current working directory for subsequent instructions. |
@@ -122,7 +124,7 @@ RUN echo "This command \
 | `*CPY src dest` | Copies a file or directory *asynchronously*. |
 | `SUB target` | Delegates execution to another Jettyfile locally or via GitHub import syntax (`github.com/owner/repo[@ref][/path]`). |
 | `*SUB target` | Delegates execution to another Jettyfile *asynchronously*. |
-| `FMT format args...` | Formats a string to standard output. |
+| `FMT format args...` | Formats a string and emits it as a `FMT:` build-log line. |
 | `^FMT file format args...` | Appends a formatted string to a target file. |
 | `$FMT NAME format args...` | Formats a string and assigns it to an environment variable (`$NAME`). |
 | `&FMT NAME format args...` | Formats a string and assigns it to a build argument (`$NAME`). |
@@ -146,13 +148,15 @@ Run `jetty` or `jetty status` to view a tabular history of completed and active 
 ## Secrets and 12-Factor Variables
 Jetty automatically loads any `.env` file located in the same directory as the executing `Jettyfile`. These variables are injected straight into the build context and seamlessly made available to `*RUN`, `*USE`, and `*JET` environments!
 
+> **Remote sub-builds:** `SUB github.com/owner/repo[@ref]` fetches and executes a remote Jettyfile with your local build context — including parent args and any loaded `.env` secrets — on your host. Only import repositories you trust, and pin a commit or tag with `@ref`; the default `main` is a mutable branch that can change between runs.
+
 **Environment Variables:**
 - `JETTY_STATE_DIR`: Overrides the default `.jetty` state storage location.
 - `JETTY_TIMEOUT`: Overrides the global 10-minute timeout limit (e.g. `export JETTY_TIMEOUT=30m`).
 
 ## Development
 
-Jetty is written in pure Go and tested heavily on Windows, Linux, and macOS.
+Jetty is written in pure Go and designed to run on Windows, Linux, and macOS. Automated CI currently builds and tests on Linux; release binaries target `linux/amd64`.
 
 ```bash
 go test ./...

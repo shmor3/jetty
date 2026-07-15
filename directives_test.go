@@ -138,8 +138,8 @@ func TestExecutePlugin(t *testing.T) {
 
 	// Test nonexistent plugin
 	err = executePlugin(state, "nonexistent")
-	if err == nil || (!strings.Contains(err.Error(), "executable file not found") && !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "cannot find the file")) {
-		t.Errorf("expected 'executable file not found', got %v", err)
+	if err == nil || (!strings.Contains(err.Error(), "executable file not found") && !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "cannot find the file") && !strings.Contains(err.Error(), "no such file or directory")) {
+		t.Errorf("expected a plugin-not-found error, got %v", err)
 	}
 
 	// Test valid .bat on Windows

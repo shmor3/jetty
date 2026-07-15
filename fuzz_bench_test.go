@@ -145,7 +145,7 @@ func FuzzExecuteFormat(f *testing.F) {
 			Context: context.Background(),
 			Env:     make(map[string]string),
 			Args:    make(map[string]string),
-			WorkDir: ".",
+			WorkDir: t.TempDir(),
 		}
 		// Should not panic
 		_ = executeFormat(state, Instruction{
