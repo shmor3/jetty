@@ -45,7 +45,7 @@ func parseFile(fileName string) ([]Instruction, error) {
 			return nil, fmt.Errorf("line %d: invalid instruction: %s", instructionLineNumber, line)
 		}
 		token := parts[0]
-		argsStart := strings.Index(line, token) + len(token)
+		argsStart := len(token)
 		directive, symbol, err := parseDirectiveToken(token)
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %w", instructionLineNumber, err)

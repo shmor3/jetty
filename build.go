@@ -104,12 +104,12 @@ func processBuild(job Job) error {
 	if job.FileName == "" {
 		buildErr := errors.New("please provide a file name")
 		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
-		return fmt.Errorf("%w: %v", ErrBuildFailed, buildErr)
+		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
 	}
 	if job.Depth > 50 {
 		buildErr := errors.New("maximum sub-build depth exceeded")
 		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
-		return fmt.Errorf("%w: %v", ErrBuildFailed, buildErr)
+		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
 	}
 
 	absFileName, err := filepath.Abs(job.FileName)
@@ -144,16 +144,11 @@ func processBuild(job Job) error {
 		}
 	}()
 
-	if job.FileName == "" {
-		buildErr = errors.New("please provide a file name")
-		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
-		return fmt.Errorf("%w: %v", ErrBuildFailed, buildErr)
-	}
 	instructions, err := parseFile(absFileName)
 	if err != nil {
 		buildErr = fmt.Errorf("parse %s: %w", job.FileName, err)
 		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
-		return fmt.Errorf("%w: %v", ErrBuildFailed, buildErr)
+		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
 	}
 
 	execCtx, cancel := context.WithCancel(job.Context)
@@ -177,7 +172,7 @@ func processBuild(job Job) error {
 	if err := executeInstructions(state, instructions); err != nil {
 		buildErr = err
 		sendResult(job.Context, job.ResultChan, "Error: "+err.Error())
-		return fmt.Errorf("%w: %v", ErrBuildFailed, buildErr)
+		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
 	}
 	return nil
 }
@@ -324,7 +319,7 @@ func lockStatusStore() (func(), error) {
 	lockPath := statusStorePath() + ".lock"
 	stateDir := filepath.Dir(lockPath)
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create lock directory %s: %w", stateDir, err)
 	}
 	_ = hideFile(stateDir)
 	for i := 0; i < 50; i++ {
@@ -407,22 +402,22 @@ func writeBuildInfosLocked(builds []BuildInfo) error {
 	path := statusStorePath()
 	stateDir := filepath.Dir(path)
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
-		return err
+		return fmt.Errorf("failed to create state directory %s: %w", stateDir, err)
 	}
 	_ = hideFile(stateDir)
 	data, err := json.MarshalIndent(builds, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal builds: %w", err)
 	}
-	tmpFile, err := os.CreateTemp(filepath.Dir(path), "builds-*.json.tmp")
+	tmpFile, err := os.CreateTemp(stateDir, "builds-*.json.tmp")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
 	if _, err := tmpFile.Write(append(data, '\n')); err != nil {
 		tmpFile.Close()
-		return err
+		return fmt.Errorf("failed to write to temp file %s: %w", tmpPath, err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		return err
