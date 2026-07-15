@@ -17,12 +17,6 @@ Built with extreme multi-platform reliability in mind, Jetty is designed to be a
 
 ## Install
 
-Install directly with Go:
-```bash
-go install github.com/shmor3/jetty@latest
-```
-
-Or build from source:
 ```bash
 git clone https://github.com/shmor3/jetty.git
 cd jetty
@@ -121,6 +115,8 @@ RUN echo "This command \
 | `ENV KEY=value` | Defines a persistent environment variable scoped to the current build execution. |
 | `RUN command` | Executes a shell command on the host. |
 | `*RUN command` | Executes a shell command *asynchronously*. |
+| `DEP path...` | Declares input files for the next cacheable step (`RUN`/`CPY`/`USE`). Their contents form the cache key. |
+| `OUT path...` | Declares the output files a cacheable step produces. When the `DEP` inputs are unchanged and the outputs still exist, the step is skipped and reported as `CACHED`. |
 | `CMD command` | Runs once after all other instructions (and background tasks) are finished. Only one allowed per file. |
 | `DIR path` | Creates a directory recursively (`mkdir -p`) within the build workspace. |
 | `WDR path` | Changes the current working directory for subsequent instructions. |

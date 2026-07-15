@@ -30,6 +30,22 @@ const (
 
 func executeInstruction(state *BuildState, inst Instruction) error {
 	switch inst.Directive {
+	case "DEP":
+		args, err := splitArgs(inst.Args)
+		if err != nil {
+			return err
+		}
+		for _, arg := range args {
+			state.PendingDeps = append(state.PendingDeps, state.expand(arg))
+		}
+	case "OUT":
+		args, err := splitArgs(inst.Args)
+		if err != nil {
+			return err
+		}
+		for _, arg := range args {
+			state.PendingOuts = append(state.PendingOuts, state.expand(arg))
+		}
 	case "ARG":
 		key, value, err := parseAssignment(inst.Args, "ARG")
 		if err != nil {
@@ -44,9 +60,26 @@ func executeInstruction(state *BuildState, inst Instruction) error {
 		state.Env[key] = state.expand(value)
 		state.log("ENV: %s set", key)
 	case "RUN":
+		if cached, err := checkCache(state, inst); err != nil {
+			return err
+		} else if cached {
+			state.log("CACHED: RUN %s", inst.Args)
+			state.PendingDeps = nil
+			state.PendingOuts = nil
+			state.CurrentCacheKey = ""
+			break
+		}
+
 		if err := executeShell(state, "RUN", inst.Args); err != nil {
 			return err
 		}
+
+		if err := saveCache(state); err != nil {
+			return err
+		}
+		state.PendingDeps = nil
+		state.PendingOuts = nil
+		state.CurrentCacheKey = ""
 	case "DIR":
 		dir, err := state.singlePath(inst.Args, "DIR")
 		if err != nil {
@@ -71,9 +104,26 @@ func executeInstruction(state *BuildState, inst Instruction) error {
 		state.WorkDir = dir
 		state.log("WDR: %s", dir)
 	case "CPY":
+		if cached, err := checkCache(state, inst); err != nil {
+			return err
+		} else if cached {
+			state.log("CACHED: CPY %s", inst.Args)
+			state.PendingDeps = nil
+			state.PendingOuts = nil
+			state.CurrentCacheKey = ""
+			break
+		}
+
 		if err := executeCopy(state, inst.Args); err != nil {
 			return err
 		}
+
+		if err := saveCache(state); err != nil {
+			return err
+		}
+		state.PendingDeps = nil
+		state.PendingOuts = nil
+		state.CurrentCacheKey = ""
 	case "SUB":
 		if err := executeSubBuild(state, inst.Args); err != nil {
 			return err
@@ -91,9 +141,26 @@ func executeInstruction(state *BuildState, inst Instruction) error {
 			return err
 		}
 	case "USE":
+		if cached, err := checkCache(state, inst); err != nil {
+			return err
+		} else if cached {
+			state.log("CACHED: USE %s", inst.Args)
+			state.PendingDeps = nil
+			state.PendingOuts = nil
+			state.CurrentCacheKey = ""
+			break
+		}
+
 		if err := executeUse(state, inst.Args); err != nil {
 			return err
 		}
+
+		if err := saveCache(state); err != nil {
+			return err
+		}
+		state.PendingDeps = nil
+		state.PendingOuts = nil
+		state.CurrentCacheKey = ""
 	case "FMT":
 		if err := executeFormat(state, inst); err != nil {
 			return err
@@ -498,7 +565,7 @@ func (state *BuildState) commandEnv() []string {
 	return env
 }
 
-func (state *BuildState) log(format string, v ...any) {
+func (state *BuildState) log(format string, v ...interface{}) {
 	sendResult(state.Context, state.ResultChan, fmt.Sprintf(format, v...))
 }
 
@@ -515,7 +582,7 @@ func (state *BuildState) expand(value string) string {
 }
 
 func sprintfExpanded(state *BuildState, format string, values []string) string {
-	expanded := make([]any, len(values))
+	expanded := make([]interface{}, len(values))
 	for i, value := range values {
 		expanded[i] = state.expand(value)
 	}
@@ -589,17 +656,13 @@ func execInContainer(ctx context.Context, command string, env map[string]string,
 	select {
 	case <-ctx.Done():
 		// Purge the container so the running exec terminates, then wait for the
-		// exec goroutine to return before exiting. Otherwise it could keep
-		// writing to the lineWriter (and its result channel) after we return
-		// and processBuild closes that channel — a send-on-closed-channel panic.
+		// exec goroutine to return before exiting. Cap the wait so a failed purge
+		// cannot hang shutdown; if it times out, detach the writer so the
+		// abandoned goroutine cannot send on a closed result channel.
 		if err := pool.Purge(resource); err != nil {
 			logger.Printf("Warning: failed to purge container: %v", err)
 		}
 		purged = true
-		// Wait for the exec goroutine to observe the purge and return, but cap
-		// the wait so a failed purge cannot block shutdown indefinitely. If it
-		// times out, detach the writer first so the abandoned goroutine cannot
-		// send on the result channel after processBuild closes it.
 		select {
 		case <-execDone:
 		case <-time.After(containerDrainTimeout):

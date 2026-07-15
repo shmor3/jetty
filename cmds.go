@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func registerCommands() {
+func registeredCommands() {
 	registerCommand("help", Command{
 		Name:        "help",
 		Description: "Show help for a command",
@@ -33,7 +33,7 @@ func registerCommands() {
 		Description: "Show version information",
 		Usage:       "version",
 		Run: func(ctx context.Context, args []string) error {
-			fmt.Fprintf(stdout, "Jetty version %s\n", version)
+			logger.Printf("Jetty version %s\n", version)
 			return nil
 		},
 		MinArgs: 0,
@@ -192,7 +192,7 @@ func registerCommands() {
 					if logger.Flags()&log.LstdFlags != 0 {
 						logger.Printf("Build: %s", result)
 					} else {
-						fmt.Fprintln(stdout, result)
+						fmt.Println(result)
 					}
 				case buildInfo, ok := <-buildInfoChan:
 					if !ok {
@@ -298,7 +298,7 @@ func sortBuildInfos(builds []BuildInfo) {
 }
 
 func printBuildInfos(builds []BuildInfo) {
-	writer := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	writer := tabwriter.NewWriter(logger.Writer(), 0, 0, 2, ' ', 0)
 	fmt.Fprintln(writer, "ID\tSTATUS\tWORKER\tSTART\tEND\tFILE\tERROR")
 	for _, info := range builds {
 		end := "-"

@@ -71,6 +71,8 @@ var directiveSymbols = map[string]map[string]bool{
 	"ENV": {"": true},
 	"RUN": {"": true, "*": true},
 	"CMD": {"": true},
+	"DEP": {"": true},
+	"OUT": {"": true},
 	"DIR": {"": true},
 	"CPY": {"": true, "*": true},
 	"WDR": {"": true},
@@ -105,7 +107,7 @@ func parseDirectiveToken(token string) (string, string, error) {
 	return directive, symbol, nil
 }
 
-func parseFlags() *Config {
+func parseFlags() (*Config, error) {
 	config := &Config{}
 	args := os.Args[1:]
 scan:
@@ -121,7 +123,7 @@ scan:
 			break scan
 		}
 	}
-	return config
+	return config, nil
 }
 func validateArgs(cmd Command, args []string) error {
 	if len(args) < cmd.MinArgs {

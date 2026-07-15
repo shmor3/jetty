@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -15,26 +14,19 @@ import (
 )
 
 var (
-	defaultCommand = "status"
-	defaultTimeout = 10 * time.Minute
-	version        = "1.0.0"
-	// ErrInvalidInput indicates the user supplied an unknown command or bad arguments.
+	defaultCommand  = "status"
+	defaultTimeout  = 10 * time.Minute
+	version         = "1.0.0"
 	ErrInvalidInput = errors.New("invalid input")
 	commands        = make(map[string]Command)
 	logger          *log.Logger
-	// stdout receives queryable command output (version string, status tables,
-	// build output). Diagnostics, warnings, and errors go to logger (stderr).
-	stdout io.Writer = os.Stdout
 )
 
-// Config holds the global flags parsed before command dispatch.
 type Config struct {
 	Help    bool
 	Verbose bool
 	Version bool
 }
-
-// Command describes a registered CLI command and its argument constraints.
 type Command struct {
 	Name        string
 	Description string
@@ -46,7 +38,7 @@ type Command struct {
 	Flags       *flag.FlagSet
 }
 
-func init() {
+func initApp() {
 	logger = log.New(os.Stderr, "", 0)
 	flag.Usage = customUsage
 	if t := os.Getenv("JETTY_TIMEOUT"); t != "" {
@@ -56,7 +48,11 @@ func init() {
 			logger.Printf("Warning: invalid JETTY_TIMEOUT %q, using default %v", t, defaultTimeout)
 		}
 	}
-	registerCommands()
+	registeredCommands()
+}
+
+func init() {
+	initApp()
 }
 
 func main() {
@@ -69,13 +65,16 @@ func main() {
 		logger.Println("Received termination signal. Initiating graceful shutdown...")
 		cancel()
 	}()
-	config := parseFlags()
+	config, err := parseFlags()
+	if err != nil {
+		logger.Fatalf("Error: %v", err)
+	}
 	if config.Help {
 		flag.Usage()
 		return
 	}
 	if config.Version {
-		fmt.Fprintf(stdout, "Jetty version %s\n", version)
+		logger.Printf("Version %s\n", version)
 		return
 	}
 	if config.Verbose {

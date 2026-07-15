@@ -266,7 +266,7 @@ func TestStatusCommandShowsCompletedBuildsByDefault(t *testing.T) {
 		t.Fatalf("build returned error: %v", err)
 	}
 
-	output := captureStdout(t)
+	output := captureLoggerOutput(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := handleSubcommands(ctx, []string{"status"}); err != nil {
@@ -291,7 +291,7 @@ func TestDefaultCommandShowsStatusHistory(t *testing.T) {
 		t.Fatalf("build returned error: %v", err)
 	}
 
-	output := captureStdout(t)
+	output := captureLoggerOutput(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := handleSubcommands(ctx, nil); err != nil {
@@ -462,4 +462,287 @@ func joinedOutputContains(output []string, fragment string) bool {
 		}
 	}
 	return false
+}
+
+func TestLoadEnvFile(t *testing.T) {
+	state := &BuildState{
+		Env: make(map[string]string),
+	}
+	dir := t.TempDir()
+	file := filepath.Join(dir, "env")
+	content := "A=B\nC=D\n#comment\n\nE=\"F\"\nG='H'"
+	os.WriteFile(file, []byte(content), 0644)
+
+	loadEnvFile(state, file)
+
+	if state.Env["A"] != "B" || state.Env["C"] != "D" || state.Env["E"] != "F" || state.Env["G"] != "H" {
+		t.Errorf("failed to load environment variables, got %v", state.Env)
+	}
+
+	loadEnvFile(state, "nonexistent.env")
+}
+
+func TestProcessBuildEdgeCases(t *testing.T) {
+	// missing file name
+	job := Job{}
+	err := processBuild(job)
+	if err == nil || !strings.Contains(err.Error(), "please provide a file name") {
+		t.Errorf("expected missing file name error, got %v", err)
+	}
+
+	// exceeded depth
+	job = Job{FileName: "dummy", Depth: 51}
+	err = processBuild(job)
+	if err == nil || !strings.Contains(err.Error(), "maximum sub-build depth exceeded") {
+		t.Errorf("expected max depth error, got %v", err)
+	}
+
+	// default initialization check
+	dir := t.TempDir()
+	file := filepath.Join(dir, "Jettyfile")
+	os.WriteFile(file, []byte(""), 0644)
+
+	job = Job{FileName: file}
+	// processBuild will return nil for an empty file, covering the defaults
+	processBuild(job)
+}
+
+func TestLockStatusStoreErrors(t *testing.T) {
+	// 1. MkdirAll failure by making the dir a file
+	dir := t.TempDir()
+	badDir := filepath.Join(dir, "baddir")
+	os.WriteFile(badDir, []byte(""), 0644)
+	os.Setenv("JETTY_STATE_DIR", badDir)
+	defer os.Unsetenv("JETTY_STATE_DIR")
+
+	_, err := lockStatusStore()
+	if err == nil {
+		t.Errorf("expected MkdirAll failure")
+	}
+
+	// 2. Lock timeout
+	goodDir := filepath.Join(dir, "gooddir")
+	os.Setenv("JETTY_STATE_DIR", goodDir)
+	os.MkdirAll(goodDir, 0755)
+
+	unlock, err := lockStatusStore()
+	if err != nil {
+		t.Fatalf("first lock failed: %v", err)
+	}
+
+	// second lock should timeout after 5 seconds, wait that's long.
+	// wait, the loop is 50 * 100ms = 5 seconds.
+	// To speed it up, we can just run it in a goroutine or wait.
+	// For test it's fine.
+	_, err = lockStatusStore()
+	if err == nil || !strings.Contains(err.Error(), "timeout waiting for lock") {
+		t.Errorf("expected lock timeout, got %v", err)
+	}
+
+	unlock()
+}
+
+func TestBuildInfoErrors(t *testing.T) {
+	dir := t.TempDir()
+	stateDir := filepath.Join(dir, ".jetty")
+	os.Setenv("JETTY_STATE_DIR", stateDir)
+	defer os.Unsetenv("JETTY_STATE_DIR")
+
+	os.MkdirAll(stateDir, 0755)
+	storePath := filepath.Join(stateDir, "builds.json")
+
+	// 1. Invalid JSON read
+	os.WriteFile(storePath, []byte("{bad json"), 0644)
+	err := saveBuildInfo(BuildInfo{ID: "test"})
+	if err == nil {
+		t.Error("expected saveBuildInfo to fail on bad json")
+	}
+
+	_, err = readBuildInfos()
+	if err == nil {
+		t.Error("expected readBuildInfos to fail on bad json")
+	}
+
+	// 2. Cannot read file because it is a directory
+	os.Remove(storePath)
+	os.MkdirAll(storePath, 0755)
+
+	err = saveBuildInfo(BuildInfo{ID: "test2"})
+	if err == nil {
+		t.Error("expected saveBuildInfo to fail when builds.json is a directory")
+	}
+
+	// 3. writeBuildInfosLocked failure
+	os.Remove(storePath)
+	// make stateDir readonly to cause CreateTemp to fail
+	// on windows this might not work perfectly just using chmod, but let's try
+	// wait, if we create a file at stateDir it fails MkdirAll in writeBuildInfosLocked
+	os.RemoveAll(stateDir)
+	os.WriteFile(stateDir, []byte(""), 0644)
+	err = saveBuildInfo(BuildInfo{ID: "test3"})
+	if err == nil {
+		t.Error("expected saveBuildInfo to fail when stateDir is a file")
+	}
+}
+
+func TestExecuteInstructionsEdgeCases(t *testing.T) {
+	// Multiple CMD directives
+	state := &BuildState{
+		Context: context.Background(),
+		Cancel:  func() {},
+	}
+	insts := []Instruction{
+		{Directive: "CMD", Args: "foo"},
+		{Directive: "CMD", Args: "bar"},
+	}
+	err := executeInstructions(state, insts)
+	if err == nil || !strings.Contains(err.Error(), "multiple CMD") {
+		t.Error("expected multiple CMD error")
+	}
+
+	// Context canceled early
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+	state.Context = ctx
+	insts = []Instruction{
+		{Directive: "RUN", Args: "echo"},
+	}
+	err = executeInstructions(state, insts)
+	if err == nil {
+		t.Error("expected context canceled error from executeInstructions")
+	}
+
+	// Async Context canceled
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	state2 := &BuildState{
+		Context: ctx2,
+		Cancel:  cancel2,
+		WorkDir: ".",
+		Args:    make(map[string]string),
+		Env:     make(map[string]string),
+	}
+	// start a long async task, but cancel context
+	cancel2()
+	insts2 := []Instruction{
+		{Directive: "RUN", Symbol: "*", Args: "sleep 10"},
+	}
+	err = executeInstructions(state2, insts2)
+	if err == nil {
+		t.Error("expected async error when context is cancelled")
+	}
+}
+
+func TestPublishBuildInfoContextDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan BuildInfo)
+	cancel()
+
+	// This should return immediately because ctx is done,
+	// rather than blocking forever on the unbuffered channel.
+	publishBuildInfo(ctx, ch, BuildInfo{})
+}
+
+func TestPublishBuildInfoNilChan(t *testing.T) {
+	publishBuildInfo(context.Background(), nil, BuildInfo{})
+}
+
+func TestPublishBuildInfoSaveError(t *testing.T) {
+	// Cause saveBuildInfo to fail
+	f, err := os.CreateTemp("", "bad-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	defer os.Remove(f.Name())
+
+	oldEnv := os.Getenv(jettyStateDirEnv)
+	os.Setenv(jettyStateDirEnv, f.Name())
+	defer os.Setenv(jettyStateDirEnv, oldEnv)
+
+	// Since we mock the logger output, it just logs
+	publishBuildInfo(context.Background(), nil, BuildInfo{})
+}
+
+func TestReadBuildInfosError(t *testing.T) {
+	oldEnv := os.Getenv(jettyStateDirEnv)
+	f, err := os.CreateTemp("", "bad-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	defer os.Remove(f.Name())
+
+	// Make lock fail or read fail
+	// Actually, if we set JETTY_STATE_DIR to \x00invalid, os.ReadFile might fail. But wait, lockStatusStore creates the dir and it will fail.
+	os.Setenv(jettyStateDirEnv, f.Name())
+	defer os.Setenv(jettyStateDirEnv, oldEnv)
+
+	_, err = readBuildInfos()
+	if err == nil {
+		t.Error("expected readBuildInfos to fail due to lock failure")
+	}
+
+	// Now make readBuildInfosLocked fail by making builds.json a directory
+	dir := t.TempDir()
+	os.Setenv(jettyStateDirEnv, dir)
+	os.MkdirAll(filepath.Join(dir, "builds.json"), 0755)
+	_, err = readBuildInfosLocked()
+	if err == nil {
+		t.Error("expected readBuildInfosLocked to fail due to builds.json being a directory")
+	}
+}
+func TestSnapshot(t *testing.T) {
+	state := &BuildState{
+		Context: context.Background(),
+		WorkDir: ".",
+		Args:    map[string]string{"foo": "bar"},
+		Env:     map[string]string{"A": "B"},
+		Boxes:   map[string]BoxInfo{"box1": {Repository: "repo1"}},
+	}
+
+	snap := state.snapshot()
+	if snap.Args["foo"] != "bar" {
+		t.Error("snapshot did not clone Args")
+	}
+	if snap.Env["A"] != "B" {
+		t.Error("snapshot did not clone Env")
+	}
+	if snap.Boxes["box1"].Repository != "repo1" {
+		t.Error("snapshot did not clone Boxes")
+	}
+}
+
+func TestWriteBuildInfosLockedErrors(t *testing.T) {
+	// Set JETTY_STATE_DIR to a file so MkdirAll fails
+	f, err := os.CreateTemp("", "bad-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	defer os.Remove(f.Name())
+
+	oldEnv := os.Getenv(jettyStateDirEnv)
+	os.Setenv(jettyStateDirEnv, f.Name())
+	defer os.Setenv(jettyStateDirEnv, oldEnv)
+
+	err = writeBuildInfosLocked([]BuildInfo{})
+	if err == nil {
+		t.Error("expected writeBuildInfosLocked to fail with MkdirAll error")
+	}
+
+	// Now set to a valid dir, but make CreateTemp fail by making the dir read-only (Windows ACL is hard, maybe use an invalid name? On Windows, \0 is invalid)
+	os.Setenv(jettyStateDirEnv, "\x00invalid")
+	err = writeBuildInfosLocked([]BuildInfo{})
+	if err == nil {
+		t.Error("expected writeBuildInfosLocked to fail due to invalid dir")
+	}
+
+	// Now make os.Rename fail by making builds.json a directory
+	validDir := t.TempDir()
+	os.Setenv(jettyStateDirEnv, validDir)
+	os.MkdirAll(filepath.Join(validDir, "builds.json"), 0755)
+	err = writeBuildInfosLocked([]BuildInfo{})
+	if err == nil {
+		t.Error("expected writeBuildInfosLocked to fail when renaming over a directory")
+	}
 }
