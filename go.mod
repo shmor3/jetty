@@ -36,3 +36,5 @@ require (
 	golang.org/x/sys v0.26.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
+
+replace github.com/rogpeppe/go-internal => github.com/rogpeppe/go-internal v1.13.1
