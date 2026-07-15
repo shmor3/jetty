@@ -22,10 +22,16 @@ const (
 	statusFailed    = "Failed"
 
 	jettyStateDirEnv = "JETTY_STATE_DIR"
+
+	// maxSubBuildDepth caps how deeply SUB directives may nest.
+	maxSubBuildDepth = 50
+	// maxStoredBuilds caps how many build records are retained on disk.
+	maxStoredBuilds = 1000
 )
 
 var (
-	statusStoreMu  sync.Mutex
+	statusStoreMu sync.Mutex
+	// ErrBuildFailed wraps any error that caused a build to fail.
 	ErrBuildFailed = errors.New("build failed")
 	asyncSemaphore chan struct{}
 )
@@ -34,6 +40,7 @@ func init() {
 	asyncSemaphore = make(chan struct{}, runtime.NumCPU())
 }
 
+// BuildInfo is the persisted status record for a single build.
 type BuildInfo struct {
 	ID         string    `json:"id"`
 	Status     string    `json:"status"`
@@ -44,6 +51,7 @@ type BuildInfo struct {
 	Error      string    `json:"error,omitempty"`
 }
 
+// Instruction is a single parsed directive from a Jettyfile.
 type Instruction struct {
 	Directive string
 	Symbol    string
@@ -51,6 +59,7 @@ type Instruction struct {
 	Line      int
 }
 
+// Job describes a build to run, including its I/O channels and inherited state.
 type Job struct {
 	BuildID       string
 	FileName      string
@@ -62,8 +71,12 @@ type Job struct {
 	InitialEnv    map[string]string
 	EnvFile       string
 	Depth         int
+	// SkipDefaultEnv suppresses loading an implicit <BaseDir>/.env. It is set
+	// for remotely fetched sub-builds whose BaseDir is a shared temp directory.
+	SkipDefaultEnv bool
 }
 
+// BuildState holds the mutable execution context for a running build.
 type BuildState struct {
 	Context         context.Context
 	FileName        string
@@ -83,6 +96,7 @@ type BuildState struct {
 	CurrentCacheKey string
 }
 
+// BoxInfo identifies a Docker image (repository and tag) for USE/FRM/BOX.
 type BoxInfo struct {
 	Repository string
 	Tag        string
@@ -121,7 +135,7 @@ func processBuild(job Job) (err error) {
 		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
 	}
-	if job.Depth > 50 {
+	if job.Depth > maxSubBuildDepth {
 		buildErr := errors.New("maximum sub-build depth exceeded")
 		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
@@ -192,9 +206,13 @@ func processBuild(job Job) (err error) {
 			sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 			return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
 		}
-	} else {
-		// Ignore error if default .env file doesn't exist
-		_ = loadEnvFile(state, filepath.Join(state.BaseDir, ".env"))
+	} else if !job.SkipDefaultEnv {
+		// The implicit .env is best-effort: a missing file is silently skipped,
+		// and any other error is surfaced as a warning but never fails a build
+		// the user did not explicitly ask to load an env file for.
+		if envErr := loadEnvFile(state, filepath.Join(state.BaseDir, ".env")); envErr != nil && !errors.Is(envErr, os.ErrNotExist) {
+			logger.Printf("Warning: ignoring .env: %v", envErr)
+		}
 	}
 
 	if err := executeInstructions(state, instructions); err != nil {
@@ -242,6 +260,15 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 			wg.Add(1)
 			go func(instruction Instruction, instructionNumber int, instructionState *BuildState) {
 				defer wg.Done()
+				// Recover panics in the worker goroutine: Go's recover only
+				// catches panics on its own stack, so without this a panic here
+				// would crash the whole CLI, bypassing processBuild's recover.
+				defer func() {
+					if r := recover(); r != nil {
+						errChan <- fmt.Errorf("(%d/%d) line %d [%s%s %s]: panic: %v", instructionNumber, len(instructions), instruction.Line, instruction.Symbol, instruction.Directive, instruction.Args, r)
+						instructionState.cancel()
+					}
+				}()
 				// SUB mostly waits on its own (already-throttled) child
 				// instructions rather than doing CPU-bound work. Holding a
 				// global semaphore slot across a nested build would let async
@@ -397,7 +424,9 @@ func lockStatusStore() (func(), error) {
 		}
 	}
 	return func() {
-		fileLock.Unlock()
+		if err := fileLock.Unlock(); err != nil {
+			logger.Printf("Warning: failed to unlock status store: %v", err)
+		}
 	}, nil
 }
 
@@ -426,8 +455,8 @@ func saveBuildInfo(buildInfo BuildInfo) error {
 	if !replaced {
 		builds = append(builds, buildInfo)
 	}
-	if len(builds) > 1000 {
-		builds = builds[len(builds)-1000:]
+	if len(builds) > maxStoredBuilds {
+		builds = builds[len(builds)-maxStoredBuilds:]
 	}
 	return writeBuildInfosLocked(builds)
 }
