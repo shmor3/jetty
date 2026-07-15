@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -11,6 +12,28 @@ import (
 	"testing"
 	"time"
 )
+
+// captureStdout redirects the package stdout writer to a buffer for the test.
+func captureStdout(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := stdout
+	stdout = &buf
+	t.Cleanup(func() { stdout = previous })
+	return &buf
+}
+
+func TestVersionCommandWritesToStdout(t *testing.T) {
+	out := captureStdout(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := handleSubcommands(ctx, []string{"version"}); err != nil {
+		t.Fatalf("version returned error: %v", err)
+	}
+	if !strings.Contains(out.String(), "Jetty version") {
+		t.Fatalf("expected version on stdout, got %q", out.String())
+	}
+}
 
 func TestParseImageReference(t *testing.T) {
 	cases := []struct {

@@ -17,6 +17,12 @@ Built with extreme multi-platform reliability in mind, Jetty is designed to be a
 
 ## Install
 
+Install directly with Go:
+```bash
+go install github.com/shmor3/jetty@latest
+```
+
+Or build from source:
 ```bash
 git clone https://github.com/shmor3/jetty.git
 cd jetty

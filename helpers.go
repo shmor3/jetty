@@ -55,6 +55,9 @@ func copyDir(ctx context.Context, src, dst string) error {
 		return fmt.Errorf("failed to read source directory %s: %w", src, err)
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
 		if entry.IsDir() {

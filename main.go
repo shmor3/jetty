@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -21,6 +22,9 @@ var (
 	ErrInvalidInput = errors.New("invalid input")
 	commands        = make(map[string]Command)
 	logger          *log.Logger
+	// stdout receives queryable command output (version string, status tables,
+	// build output). Diagnostics, warnings, and errors go to logger (stderr).
+	stdout io.Writer = os.Stdout
 )
 
 // Config holds the global flags parsed before command dispatch.
@@ -71,7 +75,7 @@ func main() {
 		return
 	}
 	if config.Version {
-		logger.Printf("Jetty version %s\n", version)
+		fmt.Fprintf(stdout, "Jetty version %s\n", version)
 		return
 	}
 	if config.Verbose {
