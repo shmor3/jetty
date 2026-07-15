@@ -38,7 +38,7 @@ type Command struct {
 	Flags       *flag.FlagSet
 }
 
-func init() {
+func initApp() {
 	logger = log.New(os.Stderr, "", 0)
 	flag.Usage = customUsage
 	if t := os.Getenv("JETTY_TIMEOUT"); t != "" {
@@ -49,6 +49,10 @@ func init() {
 		}
 	}
 	registeredCommands()
+}
+
+func init() {
+	initApp()
 }
 
 func main() {
