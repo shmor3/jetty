@@ -134,15 +134,14 @@ RUN echo "This command \
 
 ## Status and Configuration
 
-Jetty maintains an internal history of executions in `.jetty/builds.json`.
+Run `jetty` or `jetty status` to view a tabular history of completed and active builds across your machine.
+- `jetty ps -a`: Lists all builds with truncated IDs and execution metadata.
+- `jetty ps`: Lists only actively running asynchronous builds.
+- `jetty clean`: Automatically garbage-collects all status history and clears the local state directory.
+- `jetty help <command>`: View detailed CLI help.
 
-```bash
-# View active background builds
-jetty ps
-
-# View entire build history
-jetty status
-```
+## Secrets and 12-Factor Variables
+Jetty automatically loads any `.env` file located in the same directory as the executing `Jettyfile`. These variables are injected straight into the build context and seamlessly made available to `*RUN`, `*USE`, and `*JET` environments!
 
 **Environment Variables:**
 - `JETTY_STATE_DIR`: Overrides the default `.jetty` state storage location.
