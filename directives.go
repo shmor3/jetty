@@ -330,10 +330,16 @@ func executeSubBuild(state *BuildState, args string) error {
 		SkipDefaultEnv: githubURL != "",
 	})
 	wg.Wait()
-	if err != nil {
-		return fmt.Errorf("sub-build %s failed: %w", referencedFile, err)
+	// Name the sub-build by what the user wrote (the github import) rather than
+	// the opaque temp path it was fetched into.
+	subName := referencedFile
+	if githubURL != "" {
+		subName = rawArg
 	}
-	state.log("SUB: %s", referencedFile)
+	if err != nil {
+		return fmt.Errorf("sub-build %s failed: %w", subName, err)
+	}
+	state.log("SUB: %s", subName)
 	return nil
 }
 
