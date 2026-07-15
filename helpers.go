@@ -31,6 +31,9 @@ func copyFile(ctx context.Context, src, dst string) error {
 	}
 	defer destFile.Close()
 	if _, err = io.Copy(destFile, sourceFile); err != nil {
+		// Don't leave a truncated destination behind on a failed copy.
+		destFile.Close()
+		os.Remove(dst)
 		return fmt.Errorf("failed to copy data from %s to %s: %w", src, dst, err)
 	}
 	if err := os.Chmod(dst, sourceInfo.Mode()); err != nil {
@@ -38,6 +41,23 @@ func copyFile(ctx context.Context, src, dst string) error {
 	}
 	return nil
 }
+
+// copySymlink recreates the symlink at src as a symlink at dst (preserving its
+// target) rather than dereferencing it.
+func copySymlink(src, dst string) error {
+	target, err := os.Readlink(src)
+	if err != nil {
+		return fmt.Errorf("failed to read symlink %s: %w", src, err)
+	}
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to replace %s: %w", dst, err)
+	}
+	if err := os.Symlink(target, dst); err != nil {
+		return fmt.Errorf("failed to create symlink %s: %w", dst, err)
+	}
+	return nil
+}
+
 func copyDir(ctx context.Context, src, dst string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -46,8 +66,9 @@ func copyDir(ctx context.Context, src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("failed to stat source directory %s: %w", src, err)
 	}
-	err = os.MkdirAll(dst, srcInfo.Mode())
-	if err != nil {
+	// Create the destination writable so children can be written even when the
+	// source directory is read-only; its mode is restored after the copy.
+	if err := os.MkdirAll(dst, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory %s: %w", dst, err)
 	}
 	entries, err := os.ReadDir(src)
@@ -60,14 +81,21 @@ func copyDir(ctx context.Context, src, dst string) error {
 		}
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
-		if entry.IsDir() {
+		switch {
+		case entry.Type()&os.ModeSymlink != 0:
+			err = copySymlink(srcPath, dstPath)
+		case entry.IsDir():
 			err = copyDir(ctx, srcPath, dstPath)
-		} else {
+		default:
 			err = copyFile(ctx, srcPath, dstPath)
 		}
 		if err != nil {
 			return fmt.Errorf("failed to copy %s to %s: %w", srcPath, dstPath, err)
 		}
+	}
+	// Restore the source directory's permissions now that its children exist.
+	if err := os.Chmod(dst, srcInfo.Mode()); err != nil {
+		return fmt.Errorf("failed to chmod %s: %w", dst, err)
 	}
 	return nil
 }
