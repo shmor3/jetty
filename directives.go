@@ -20,6 +20,22 @@ import (
 
 func executeInstruction(state *BuildState, inst Instruction) error {
 	switch inst.Directive {
+	case "DEP":
+		args, err := splitArgs(inst.Args)
+		if err != nil {
+			return err
+		}
+		for _, arg := range args {
+			state.PendingDeps = append(state.PendingDeps, state.expand(arg))
+		}
+	case "OUT":
+		args, err := splitArgs(inst.Args)
+		if err != nil {
+			return err
+		}
+		for _, arg := range args {
+			state.PendingOuts = append(state.PendingOuts, state.expand(arg))
+		}
 	case "ARG":
 		key, value, err := parseAssignment(inst.Args, "ARG")
 		if err != nil {
@@ -34,9 +50,26 @@ func executeInstruction(state *BuildState, inst Instruction) error {
 		state.Env[key] = state.expand(value)
 		state.log("ENV: %s=%s", key, state.Env[key])
 	case "RUN":
+		if cached, err := checkCache(state, inst); err != nil {
+			return err
+		} else if cached {
+			state.log("CACHED: RUN %s", inst.Args)
+			state.PendingDeps = nil
+			state.PendingOuts = nil
+			state.CurrentCacheKey = ""
+			break
+		}
+
 		if err := executeShell(state, "RUN", inst.Args); err != nil {
 			return err
 		}
+
+		if err := saveCache(state); err != nil {
+			return err
+		}
+		state.PendingDeps = nil
+		state.PendingOuts = nil
+		state.CurrentCacheKey = ""
 	case "DIR":
 		dir, err := state.singlePath(inst.Args, "DIR")
 		if err != nil {
@@ -61,9 +94,26 @@ func executeInstruction(state *BuildState, inst Instruction) error {
 		state.WorkDir = dir
 		state.log("WDR: %s", dir)
 	case "CPY":
+		if cached, err := checkCache(state, inst); err != nil {
+			return err
+		} else if cached {
+			state.log("CACHED: CPY %s", inst.Args)
+			state.PendingDeps = nil
+			state.PendingOuts = nil
+			state.CurrentCacheKey = ""
+			break
+		}
+
 		if err := executeCopy(state, inst.Args); err != nil {
 			return err
 		}
+		
+		if err := saveCache(state); err != nil {
+			return err
+		}
+		state.PendingDeps = nil
+		state.PendingOuts = nil
+		state.CurrentCacheKey = ""
 	case "SUB":
 		if err := executeSubBuild(state, inst.Args); err != nil {
 			return err
@@ -81,9 +131,26 @@ func executeInstruction(state *BuildState, inst Instruction) error {
 			return err
 		}
 	case "USE":
+		if cached, err := checkCache(state, inst); err != nil {
+			return err
+		} else if cached {
+			state.log("CACHED: USE %s", inst.Args)
+			state.PendingDeps = nil
+			state.PendingOuts = nil
+			state.CurrentCacheKey = ""
+			break
+		}
+		
 		if err := executeUse(state, inst.Args); err != nil {
 			return err
 		}
+		
+		if err := saveCache(state); err != nil {
+			return err
+		}
+		state.PendingDeps = nil
+		state.PendingOuts = nil
+		state.CurrentCacheKey = ""
 	case "FMT":
 		if err := executeFormat(state, inst); err != nil {
 			return err

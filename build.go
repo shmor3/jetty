@@ -75,9 +75,12 @@ type BuildState struct {
 	Env        map[string]string
 	Boxes      map[string]BoxInfo
 	DefaultBox string
-	ResultChan chan<- string
-	Cancel     context.CancelFunc
-	Depth      int
+	ResultChan      chan<- string
+	Cancel          context.CancelFunc
+	Depth           int
+	PendingDeps     []string
+	PendingOuts     []string
+	CurrentCacheKey string
 }
 
 type BoxInfo struct {
