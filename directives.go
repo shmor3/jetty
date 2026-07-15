@@ -475,24 +475,28 @@ func execInContainer(ctx context.Context, command string, env map[string]string,
 	lw := &lineWriter{label: "USE " + box.Repository, state: state}
 	defer lw.Close()
 
-	execDone := make(chan error, 1)
-	var exitCode int
+	type execResult struct {
+		code int
+		err  error
+	}
+	execDone := make(chan execResult, 1)
 	go func() {
 		code, e := resource.Exec([]string{"/bin/sh", "-c", command}, dockertest.ExecOptions{
 			Env:    formatEnv(env),
 			StdOut: lw,
 			StdErr: lw,
 		})
-		exitCode = code
-		execDone <- e
+		execDone <- execResult{code, e}
 	}()
 
 	var errExec error
+	var exitCode int
 	select {
 	case <-ctx.Done():
 		errExec = ctx.Err()
-	case e := <-execDone:
-		errExec = e
+	case res := <-execDone:
+		errExec = res.err
+		exitCode = res.code
 	}
 	if errExec != nil {
 		return fmt.Errorf("container command failed: %w", errExec)

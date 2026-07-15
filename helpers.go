@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,20 +20,23 @@ func copyFile(ctx context.Context, src, dst string) error {
 	defer sourceFile.Close()
 	sourceInfo, err := sourceFile.Stat()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to stat source file %s: %w", src, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
+		return fmt.Errorf("failed to create directory for %s: %w", dst, err)
 	}
 	destFile, err := os.Create(dst)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create destination file %s: %w", dst, err)
 	}
 	defer destFile.Close()
 	if _, err = io.Copy(destFile, sourceFile); err != nil {
-		return err
+		return fmt.Errorf("failed to copy data from %s to %s: %w", src, dst, err)
 	}
-	return os.Chmod(dst, sourceInfo.Mode())
+	if err := os.Chmod(dst, sourceInfo.Mode()); err != nil {
+		return fmt.Errorf("failed to chmod %s: %w", dst, err)
+	}
+	return nil
 }
 func copyDir(ctx context.Context, src, dst string) error {
 	if err := ctx.Err(); err != nil {
@@ -40,15 +44,15 @@ func copyDir(ctx context.Context, src, dst string) error {
 	}
 	srcInfo, err := os.Stat(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to stat source directory %s: %w", src, err)
 	}
 	err = os.MkdirAll(dst, srcInfo.Mode())
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create destination directory %s: %w", dst, err)
 	}
 	entries, err := os.ReadDir(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read source directory %s: %w", src, err)
 	}
 	for _, entry := range entries {
 		srcPath := filepath.Join(src, entry.Name())
@@ -59,22 +63,24 @@ func copyDir(ctx context.Context, src, dst string) error {
 			err = copyFile(ctx, srcPath, dstPath)
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to copy %s to %s: %w", srcPath, dstPath, err)
 		}
 	}
 	return nil
 }
 func appendToFile(filename, content string) error {
 	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
-		return err
+		return fmt.Errorf("failed to create directory for append %s: %w", filename, err)
 	}
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to open file for append %s: %w", filename, err)
 	}
 	defer f.Close()
-	_, err = f.WriteString(content)
-	return err
+	if _, err = f.WriteString(content); err != nil {
+		return fmt.Errorf("failed to write to file %s: %w", filename, err)
+	}
+	return nil
 }
 
 type lineWriter struct {
