@@ -107,7 +107,7 @@ func parseDirectiveToken(token string) (string, string, error) {
 	return directive, symbol, nil
 }
 
-func parseFlags() (*Config, error) {
+func parseFlags() *Config {
 	config := &Config{}
 	args := os.Args[1:]
 scan:
@@ -123,8 +123,9 @@ scan:
 			break scan
 		}
 	}
-	return config, nil
+	return config
 }
+
 func validateArgs(cmd Command, args []string) error {
 	if len(args) < cmd.MinArgs {
 		return fmt.Errorf("%w: not enough arguments for command '%s'", ErrInvalidInput, cmd.Name)

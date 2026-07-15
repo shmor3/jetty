@@ -266,7 +266,7 @@ func TestStatusCommandShowsCompletedBuildsByDefault(t *testing.T) {
 		t.Fatalf("build returned error: %v", err)
 	}
 
-	output := captureLoggerOutput(t)
+	output := captureStdout(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := handleSubcommands(ctx, []string{"status"}); err != nil {
@@ -291,7 +291,7 @@ func TestDefaultCommandShowsStatusHistory(t *testing.T) {
 		t.Fatalf("build returned error: %v", err)
 	}
 
-	output := captureLoggerOutput(t)
+	output := captureStdout(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := handleSubcommands(ctx, nil); err != nil {
@@ -405,6 +405,15 @@ func captureLoggerOutput(t *testing.T) *bytes.Buffer {
 	t.Cleanup(func() {
 		logger = previousLogger
 	})
+	return &output
+}
+
+func captureStdout(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var output bytes.Buffer
+	previous := stdout
+	stdout = &output
+	t.Cleanup(func() { stdout = previous })
 	return &output
 }
 

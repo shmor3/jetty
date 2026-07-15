@@ -135,3 +135,158 @@ func TestUnreadableImplicitEnvDoesNotFailBuild(t *testing.T) {
 		t.Fatalf("expected build to complete: %v", err)
 	}
 }
+
+// TestBuildCacheSkipsUnchangedStep drives a DEP/OUT-cached RUN twice with
+// unchanged inputs and asserts the second run is reported CACHED and does not
+// re-execute the command (its side effect happens exactly once).
+func TestBuildCacheSkipsUnchangedStep(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("sh"); err != nil {
+			t.Skip("requires sh for the RUN command")
+		}
+	}
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	if err := os.WriteFile(filepath.Join(dir, "input.txt"), []byte("input"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	buildFile := filepath.Join(dir, "Jettyfile")
+	content := strings.Join([]string{
+		"DEP input.txt",
+		"OUT counter.txt",
+		"RUN echo x >> counter.txt",
+		"",
+	}, "\n")
+	if err := os.WriteFile(buildFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := runBuildForTest(t, buildFile); err != nil {
+		t.Fatalf("first build failed: %v", err)
+	}
+	output, _, err := runBuildForTest(t, buildFile)
+	if err != nil {
+		t.Fatalf("second build failed: %v", err)
+	}
+	if !joinedOutputContains(output, "CACHED") {
+		t.Fatalf("expected the second build to report a cache hit, got: %q", output)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "counter.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "x"); got != 1 {
+		t.Fatalf("expected the RUN to execute exactly once (counter=1), got %d:\n%q", got, string(data))
+	}
+}
+
+// TestBuildCacheInvalidatesOnArgChange verifies that changing an ARG referenced
+// by a cached command invalidates the cache and re-runs the step.
+func TestBuildCacheInvalidatesOnArgChange(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("sh"); err != nil {
+			t.Skip("requires sh for the RUN command")
+		}
+	}
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	if err := os.WriteFile(filepath.Join(dir, "input.txt"), []byte("input"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	buildFile := filepath.Join(dir, "Jettyfile")
+	write := func(mode string) {
+		content := strings.Join([]string{
+			"ARG MODE=" + mode,
+			"DEP input.txt",
+			"OUT counter.txt",
+			"RUN echo $MODE >> counter.txt",
+			"",
+		}, "\n")
+		if err := os.WriteFile(buildFile, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("debug")
+	if _, _, err := runBuildForTest(t, buildFile); err != nil {
+		t.Fatalf("first build failed: %v", err)
+	}
+	write("release")
+	output, _, err := runBuildForTest(t, buildFile)
+	if err != nil {
+		t.Fatalf("second build failed: %v", err)
+	}
+	if joinedOutputContains(output, "CACHED") {
+		t.Fatalf("changing an ARG must invalidate the cache, but the step was CACHED: %q", output)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "counter.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "debug") || !strings.Contains(string(data), "release") {
+		t.Fatalf("expected both runs to execute, got %q", string(data))
+	}
+}
+
+// TestCacheKeyExcludesRuntimeIDs verifies the cache key ignores the per-run
+// BUILD_ID/WORKER_NODE identifiers, so a command that references them still caches.
+func TestCacheKeyExcludesRuntimeIDs(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	if err := os.WriteFile(filepath.Join(dir, "dep.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	inst := Instruction{Directive: "RUN", Args: "echo $BUILD_ID"}
+	keyFor := func(buildID string) string {
+		s := &BuildState{
+			Context:     context.Background(),
+			WorkDir:     dir,
+			Env:         map[string]string{},
+			Args:        map[string]string{"BUILD_ID": buildID, "WORKER_NODE": "local"},
+			PendingDeps: []string{"dep.txt"},
+		}
+		if _, err := checkCache(s, inst); err != nil {
+			t.Fatal(err)
+		}
+		return s.CurrentCacheKey
+	}
+	if k1, k2 := keyFor("111"), keyFor("222"); k1 != k2 {
+		t.Fatalf("cache key must not depend on BUILD_ID: %q != %q", k1, k2)
+	}
+}
+
+// TestAsyncSubBuildsDoNotStall spawns more concurrent async *SUB directives than
+// there are semaphore slots, each with its own async child, and asserts the
+// build completes. Without the SUB semaphore-skip this deadlocks until timeout.
+func TestAsyncSubBuildsDoNotStall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("sh"); err != nil {
+			t.Skip("requires sh for the RUN command")
+		}
+	}
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	if err := os.WriteFile(filepath.Join(dir, "child.Jettyfile"), []byte("*RUN echo hi\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for i := 0; i < runtime.NumCPU()+2; i++ {
+		lines = append(lines, "*SUB child.Jettyfile")
+	}
+	lines = append(lines, "CMD echo done", "")
+	buildFile := filepath.Join(dir, "Jettyfile")
+	if err := os.WriteFile(buildFile, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	output, infos, err := runBuildForTest(t, buildFile)
+	if err != nil {
+		t.Fatalf("nested async sub-builds should complete without stalling, got: %v", err)
+	}
+	if !joinedOutputContains(output, "CMD: done") {
+		t.Fatalf("expected CMD to run after all async sub-builds, got: %q", output)
+	}
+	if len(infos) == 0 || infos[len(infos)-1].Status != statusCompleted {
+		t.Fatalf("expected final build status Completed, got %#v", infos)
+	}
+}

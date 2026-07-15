@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,7 @@ import (
 
 var cacheStoreMu sync.Mutex
 
+// CacheEntry is a persisted DEP/OUT cache record keyed by a step's cache key.
 type CacheEntry struct {
 	Outputs map[string]string `json:"outputs"`
 }
@@ -110,6 +112,7 @@ func writeCacheLocked(cache map[string]CacheEntry) error {
 	if err := os.WriteFile(tempPath, data, 0644); err != nil {
 		return err
 	}
+	defer os.Remove(tempPath)
 
 	return os.Rename(tempPath, cachePath)
 }
@@ -179,7 +182,19 @@ func hashFiles(workDir string, patterns []string) (string, error) {
 			return "", err
 		}
 
-		fmt.Fprintf(h, "%s:%d:%d:", filepath.ToSlash(rel), info.Size(), info.ModTime().UnixNano())
+		// Hash the relative path plus the file's actual contents so the cache
+		// key reflects real inputs/outputs rather than just size and mtime
+		// (which can collide on content changes and churn on mtime-only changes).
+		fmt.Fprintf(h, "%s:%d:", filepath.ToSlash(rel), info.Size())
+		file, err := os.Open(f)
+		if err != nil {
+			return "", err
+		}
+		if _, err := io.Copy(h, file); err != nil {
+			file.Close()
+			return "", err
+		}
+		file.Close()
 	}
 
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
@@ -208,6 +223,21 @@ func checkCache(state *BuildState, inst Instruction) (bool, error) {
 		fmt.Fprintf(keyHash, ":%s=%s", k, state.Env[k])
 	}
 
+	// Fold in build ARGs so a change to an ARG referenced by the command
+	// invalidates the cache. Exclude the runtime-injected identifiers, which
+	// are unique per run and would otherwise defeat caching entirely.
+	var argKeys []string
+	for k := range state.Args {
+		if k == "BUILD_ID" || k == "WORKER_NODE" {
+			continue
+		}
+		argKeys = append(argKeys, k)
+	}
+	sort.Strings(argKeys)
+	for _, k := range argKeys {
+		fmt.Fprintf(keyHash, ":%s=%s", k, state.Args[k])
+	}
+
 	state.CurrentCacheKey = fmt.Sprintf("%x", keyHash.Sum(nil))
 
 	unlock, err := lockCacheStore()
@@ -234,14 +264,16 @@ func checkCache(state *BuildState, inst Instruction) (bool, error) {
 	}
 
 	currentOutsHash, err := hashFiles(state.WorkDir, state.PendingOuts)
-	if err != nil || currentOutsHash != entry.Outputs["hash"] {
+	if err != nil {
 		return false, nil
 	}
-
-	// If the expected outputs are missing, NEVER hit the cache. We must run to produce them.
-	// Wait, if they were missing when cached, we could hit it, but it's safer to always rerun if outputs are unexpectedly missing.
-	// We'll let it hit if entry.Outputs["hash"] is also "missing", which means the command consistently produces no outputs.
-	if currentOutsHash == "missing" && entry.Outputs["hash"] != "missing" {
+	// Never hit the cache when the declared outputs are absent: the step must
+	// run to (re)produce them.
+	if currentOutsHash == "missing" {
+		return false, nil
+	}
+	// Otherwise a hit requires the current outputs to match the recorded hash.
+	if currentOutsHash != entry.Outputs["hash"] {
 		return false, nil
 	}
 
