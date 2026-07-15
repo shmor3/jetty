@@ -1,5 +1,0 @@
-# Jettyfile
-
-&FMT SUB_MESSAGE "%s" nested-build
-^FMT build/sub-message.txt "%s" $SUB_MESSAGE
-RUN echo sub build complete
