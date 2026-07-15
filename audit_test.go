@@ -259,6 +259,55 @@ func TestBuildAsyncFailureSuppressesCMD(t *testing.T) {
 	}
 }
 
+func TestLineWriterDetachDropsWrites(t *testing.T) {
+	ch := make(chan string, 8)
+	state := &BuildState{Context: context.Background(), ResultChan: ch}
+	lw := &lineWriter{label: "T", state: state}
+	if _, err := lw.Write([]byte("before\n")); err != nil {
+		t.Fatal(err)
+	}
+	lw.detach()
+	// Writes and Close after detach must not send on the channel or panic.
+	if _, err := lw.Write([]byte("after\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := lw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(ch)
+	var got []string
+	for m := range ch {
+		got = append(got, m)
+	}
+	if len(got) != 1 || !strings.Contains(got[0], "before") {
+		t.Fatalf("expected only the pre-detach line, got %q", got)
+	}
+}
+
+func TestUnreadableImplicitEnvDoesNotFailBuild(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses file permissions")
+	}
+	dir := t.TempDir()
+	t.Setenv(jettyStateDirEnv, filepath.Join(dir, "state"))
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte("FOO=bar\n"), 0000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(envPath, 0644) })
+	buildFile := filepath.Join(dir, "Jettyfile")
+	if err := os.WriteFile(buildFile, []byte("DIR out\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := runBuildForTest(t, buildFile); err != nil {
+		t.Fatalf("an unreadable implicit .env must not fail the build, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out")); err != nil {
+		t.Fatalf("expected build to complete: %v", err)
+	}
+}
+
 func TestExecuteUseErrorPaths(t *testing.T) {
 	newState := func() *BuildState {
 		return &BuildState{
