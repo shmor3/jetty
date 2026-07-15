@@ -22,20 +22,10 @@ const (
 	statusFailed    = "Failed"
 
 	jettyStateDirEnv = "JETTY_STATE_DIR"
-
-	// maxSubBuildDepth caps how deeply SUB directives may nest.
-	maxSubBuildDepth = 50
-	// maxStoredBuilds caps how many build records are retained on disk.
-	maxStoredBuilds = 1000
-	// lockRetries and lockRetryInterval bound how long we wait to acquire the
-	// status-store lock (lockRetries * lockRetryInterval total).
-	lockRetries       = 50
-	lockRetryInterval = 100 * time.Millisecond
 )
 
 var (
-	statusStoreMu sync.Mutex
-	// ErrBuildFailed wraps any error that caused a build to fail.
+	statusStoreMu  sync.Mutex
 	ErrBuildFailed = errors.New("build failed")
 	asyncSemaphore chan struct{}
 )
@@ -44,7 +34,6 @@ func init() {
 	asyncSemaphore = make(chan struct{}, runtime.NumCPU())
 }
 
-// BuildInfo is the persisted status record for a single build.
 type BuildInfo struct {
 	ID         string    `json:"id"`
 	Status     string    `json:"status"`
@@ -55,7 +44,6 @@ type BuildInfo struct {
 	Error      string    `json:"error,omitempty"`
 }
 
-// Instruction is a single parsed directive from a Jettyfile.
 type Instruction struct {
 	Directive string
 	Symbol    string
@@ -63,7 +51,6 @@ type Instruction struct {
 	Line      int
 }
 
-// Job describes a build to run, including its I/O channels and inherited state.
 type Job struct {
 	BuildID       string
 	FileName      string
@@ -77,24 +64,25 @@ type Job struct {
 	Depth         int
 }
 
-// BuildState holds the mutable execution context for a running build.
 type BuildState struct {
-	Context    context.Context
-	FileName   string
-	BaseDir    string
-	WorkDir    string
-	BuildID    string
-	WorkerNode string
-	Args       map[string]string
-	Env        map[string]string
-	Boxes      map[string]BoxInfo
-	DefaultBox string
-	ResultChan chan<- string
-	Cancel     context.CancelFunc
-	Depth      int
+	Context         context.Context
+	FileName        string
+	BaseDir         string
+	WorkDir         string
+	BuildID         string
+	WorkerNode      string
+	Args            map[string]string
+	Env             map[string]string
+	Boxes           map[string]BoxInfo
+	DefaultBox      string
+	ResultChan      chan<- string
+	Cancel          context.CancelFunc
+	Depth           int
+	PendingDeps     []string
+	PendingOuts     []string
+	CurrentCacheKey string
 }
 
-// BoxInfo identifies a Docker image (repository and tag) for USE/FRM/BOX.
 type BoxInfo struct {
 	Repository string
 	Tag        string
@@ -133,7 +121,7 @@ func processBuild(job Job) (err error) {
 		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
 	}
-	if job.Depth > maxSubBuildDepth {
+	if job.Depth > 50 {
 		buildErr := errors.New("maximum sub-build depth exceeded")
 		sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 		return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
@@ -199,19 +187,14 @@ func processBuild(job Job) (err error) {
 	state.Args["WORKER_NODE"] = job.WorkerNode
 
 	if job.EnvFile != "" {
-		// An explicitly requested env file must exist and be readable.
-		if envErr := loadEnvFile(state, job.EnvFile); envErr != nil {
-			buildErr = fmt.Errorf("failed to load env file %s: %w", job.EnvFile, envErr)
+		if err := loadEnvFile(state, job.EnvFile); err != nil {
+			buildErr = fmt.Errorf("failed to load env file %s: %w", job.EnvFile, err)
 			sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
 			return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
 		}
 	} else {
-		// The implicit .env is best-effort: a missing file is silently skipped,
-		// and any other error is surfaced as a warning but never fails a build
-		// the user did not explicitly ask to load an env file for.
-		if envErr := loadEnvFile(state, filepath.Join(state.BaseDir, ".env")); envErr != nil && !errors.Is(envErr, os.ErrNotExist) {
-			logger.Printf("Warning: ignoring .env: %v", envErr)
-		}
+		// Ignore error if default .env file doesn't exist
+		_ = loadEnvFile(state, filepath.Join(state.BaseDir, ".env"))
 	}
 
 	if err := executeInstructions(state, instructions); err != nil {
@@ -252,6 +235,10 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 		count := i + 1
 		if inst.Symbol == "*" {
 			asyncState := state.snapshot()
+			state.PendingDeps = nil
+			state.PendingOuts = nil
+			state.CurrentCacheKey = ""
+
 			wg.Add(1)
 			go func(instruction Instruction, instructionNumber int, instructionState *BuildState) {
 				defer wg.Done()
@@ -349,19 +336,22 @@ func cloneBoxMap(source map[string]BoxInfo) map[string]BoxInfo {
 
 func (state *BuildState) snapshot() *BuildState {
 	return &BuildState{
-		Context:    state.Context,
-		FileName:   state.FileName,
-		BaseDir:    state.BaseDir,
-		WorkDir:    state.WorkDir,
-		BuildID:    state.BuildID,
-		WorkerNode: state.WorkerNode,
-		Args:       cloneStringMap(state.Args),
-		Env:        cloneStringMap(state.Env),
-		Boxes:      cloneBoxMap(state.Boxes),
-		DefaultBox: state.DefaultBox,
-		ResultChan: state.ResultChan,
-		Cancel:     state.Cancel,
-		Depth:      state.Depth,
+		Context:         state.Context,
+		FileName:        state.FileName,
+		BaseDir:         state.BaseDir,
+		WorkDir:         state.WorkDir,
+		BuildID:         state.BuildID,
+		WorkerNode:      state.WorkerNode,
+		Args:            cloneStringMap(state.Args),
+		Env:             cloneStringMap(state.Env),
+		Boxes:           cloneBoxMap(state.Boxes),
+		DefaultBox:      state.DefaultBox,
+		ResultChan:      state.ResultChan,
+		Cancel:          state.Cancel,
+		Depth:           state.Depth,
+		PendingDeps:     append([]string(nil), state.PendingDeps...),
+		PendingOuts:     append([]string(nil), state.PendingOuts...),
+		CurrentCacheKey: state.CurrentCacheKey,
 	}
 }
 
@@ -395,12 +385,12 @@ func lockStatusStore() (func(), error) {
 
 	if !locked {
 		logger.Printf("Waiting for lock on %s...", lockPath)
-		for i := 0; i < lockRetries; i++ {
+		for i := 0; i < 50; i++ {
 			locked, err = fileLock.TryLock()
 			if err == nil && locked {
 				break
 			}
-			time.Sleep(lockRetryInterval)
+			time.Sleep(100 * time.Millisecond)
 		}
 		if !locked {
 			return nil, fmt.Errorf("timeout waiting for lock on %s", lockPath)
@@ -436,8 +426,8 @@ func saveBuildInfo(buildInfo BuildInfo) error {
 	if !replaced {
 		builds = append(builds, buildInfo)
 	}
-	if len(builds) > maxStoredBuilds {
-		builds = builds[len(builds)-maxStoredBuilds:]
+	if len(builds) > 1000 {
+		builds = builds[len(builds)-1000:]
 	}
 	return writeBuildInfosLocked(builds)
 }

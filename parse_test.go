@@ -102,3 +102,151 @@ func TestParseFileMultilineInstruction(t *testing.T) {
 		t.Fatalf("expected instruction to report starting line 1, got %d", instructions[0].Line)
 	}
 }
+
+func TestParseFlags(t *testing.T) {
+	// Backup and restore os.Args
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+
+	tests := []struct {
+		name        string
+		args        []string
+		wantHelp    bool
+		wantVersion bool
+		wantVerbose bool
+		wantErr     bool
+	}{
+		{"no flags", []string{"jetty"}, false, false, false, false},
+		{"help flag", []string{"jetty", "--help"}, true, false, false, false},
+		{"short help flag", []string{"jetty", "-h"}, true, false, false, false},
+		{"version flag", []string{"jetty", "--version"}, false, true, false, false},
+		{"verbose flag", []string{"jetty", "--verbose"}, false, false, true, false},
+		{"short verbose flag", []string{"jetty", "-v"}, false, false, true, false},
+		{"invalid flag", []string{"jetty", "--invalid"}, false, false, false, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Args = tc.args
+			config, err := parseFlags()
+			if (err != nil) != tc.wantErr {
+				t.Errorf("parseFlags() error = %v, wantErr %v", err, tc.wantErr)
+				return
+			}
+			if err == nil {
+				if config.Help != tc.wantHelp {
+					t.Errorf("parseFlags() Help = %v, want %v", config.Help, tc.wantHelp)
+				}
+				if config.Version != tc.wantVersion {
+					t.Errorf("parseFlags() Version = %v, want %v", config.Version, tc.wantVersion)
+				}
+				if config.Verbose != tc.wantVerbose {
+					t.Errorf("parseFlags() Verbose = %v, want %v", config.Verbose, tc.wantVerbose)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateArgs(t *testing.T) {
+	cmd := Command{
+		MinArgs: 1,
+		MaxArgs: 2,
+	}
+
+	if err := validateArgs(cmd, []string{"arg1"}); err != nil {
+		t.Errorf("expected nil error for valid args, got %v", err)
+	}
+
+	if err := validateArgs(cmd, []string{"arg1", "arg2"}); err != nil {
+		t.Errorf("expected nil error for valid args, got %v", err)
+	}
+
+	if err := validateArgs(cmd, []string{}); err == nil {
+		t.Error("expected error for too few args, got nil")
+	}
+
+	if err := validateArgs(cmd, []string{"arg1", "arg2", "arg3"}); err == nil {
+		t.Error("expected error for too many args, got nil")
+	}
+}
+
+func TestParseFileErrors(t *testing.T) {
+	dir := t.TempDir()
+
+	// Test file open error
+	_, err := parseFile(filepath.Join(dir, "nonexistent"))
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+
+	// Test invalid instruction (no args)
+	badJetty := filepath.Join(dir, "JettyfileBad")
+	os.WriteFile(badJetty, []byte("RUN\n"), 0644)
+	_, err = parseFile(badJetty)
+	if err == nil || !strings.Contains(err.Error(), "invalid instruction") {
+		t.Errorf("expected invalid instruction error, got %v", err)
+	}
+
+	// Test unterminated multi-line
+	multiJetty := filepath.Join(dir, "JettyfileMulti")
+	os.WriteFile(multiJetty, []byte("RUN echo \\\n"), 0644)
+	_, err = parseFile(multiJetty)
+	if err == nil || !strings.Contains(err.Error(), "unterminated multi-line") {
+		t.Errorf("expected unterminated multi-line error, got %v", err)
+	}
+}
+
+func TestParseDirectiveTokenEdgeCases(t *testing.T) {
+	// Empty token
+	_, _, err := parseDirectiveToken("")
+	if err == nil || !strings.Contains(err.Error(), "empty directive") {
+		t.Errorf("expected empty directive error, got %v", err)
+	}
+
+	// Just modifier
+	_, _, err = parseDirectiveToken("*")
+	if err == nil || !strings.Contains(err.Error(), "invalid directive") {
+		t.Errorf("expected invalid directive error, got %v", err)
+	}
+
+	// Missing modifier logic
+	originalSymbols := directiveSymbols["BOX"]
+	directiveSymbols["BOX"] = map[string]bool{"*": true} // ONLY allows *
+
+	_, _, err = parseDirectiveToken("BOX")
+	if err == nil || !strings.Contains(err.Error(), "requires a supported modifier") {
+		t.Errorf("expected missing modifier error, got %v", err)
+	}
+
+	_, _, err = parseDirectiveToken("^BOX")
+	if err == nil || !strings.Contains(err.Error(), "is not supported for directive") {
+		t.Errorf("expected unsupported modifier error, got %v", err)
+	}
+
+	directiveSymbols["BOX"] = originalSymbols
+}
+
+func TestParseFileEmptyAndComments(t *testing.T) {
+	dir := t.TempDir()
+	fileName := filepath.Join(dir, "Jettyfile")
+	content := "\n# comment\nRUN echo hello\n\n# another comment\n"
+	os.WriteFile(fileName, []byte(content), 0644)
+
+	instructions, err := parseFile(fileName)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(instructions) != 1 {
+		t.Errorf("expected 1 instruction, got %d", len(instructions))
+	}
+}
+
+func TestParseFileDirectory(t *testing.T) {
+	dir := t.TempDir()
+	// parseFile on a directory should fail either at os.Open or scanner.Err
+	_, err := parseFile(dir)
+	if err == nil {
+		t.Error("expected error when parsing a directory")
+	}
+}
