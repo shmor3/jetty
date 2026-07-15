@@ -597,10 +597,13 @@ func execInContainer(ctx context.Context, command string, env map[string]string,
 		}
 		purged = true
 		// Wait for the exec goroutine to observe the purge and return, but cap
-		// the wait so a failed purge cannot block shutdown indefinitely.
+		// the wait so a failed purge cannot block shutdown indefinitely. If it
+		// times out, detach the writer first so the abandoned goroutine cannot
+		// send on the result channel after processBuild closes it.
 		select {
 		case <-execDone:
 		case <-time.After(containerDrainTimeout):
+			lw.detach()
 			logger.Printf("Warning: container exec did not stop after purge; abandoning it")
 		}
 		return ctx.Err()

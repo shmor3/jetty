@@ -206,11 +206,11 @@ func processBuild(job Job) (err error) {
 			return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
 		}
 	} else {
-		// The implicit .env is optional; only a real read error is fatal.
+		// The implicit .env is best-effort: a missing file is silently skipped,
+		// and any other error is surfaced as a warning but never fails a build
+		// the user did not explicitly ask to load an env file for.
 		if envErr := loadEnvFile(state, filepath.Join(state.BaseDir, ".env")); envErr != nil && !errors.Is(envErr, os.ErrNotExist) {
-			buildErr = fmt.Errorf("failed to load .env: %w", envErr)
-			sendResult(job.Context, job.ResultChan, "Error: "+buildErr.Error())
-			return fmt.Errorf("%w: %w", ErrBuildFailed, buildErr)
+			logger.Printf("Warning: ignoring .env: %v", envErr)
 		}
 	}
 
