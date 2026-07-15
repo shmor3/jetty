@@ -23,6 +23,9 @@ const (
 	remoteFetchTimeout = 30 * time.Second
 	// maxRemoteJettyfileSize caps the size of a remotely fetched Jettyfile.
 	maxRemoteJettyfileSize = 10 << 20 // 10 MiB
+	// containerDrainTimeout caps how long we wait for a cancelled container exec
+	// to stop after purging, so a failed purge cannot hang shutdown.
+	containerDrainTimeout = 5 * time.Second
 )
 
 func executeInstruction(state *BuildState, inst Instruction) error {
@@ -593,7 +596,13 @@ func execInContainer(ctx context.Context, command string, env map[string]string,
 			logger.Printf("Warning: failed to purge container: %v", err)
 		}
 		purged = true
-		<-execDone
+		// Wait for the exec goroutine to observe the purge and return, but cap
+		// the wait so a failed purge cannot block shutdown indefinitely.
+		select {
+		case <-execDone:
+		case <-time.After(containerDrainTimeout):
+			logger.Printf("Warning: container exec did not stop after purge; abandoning it")
+		}
 		return ctx.Err()
 	case res := <-execDone:
 		errExec = res.err
