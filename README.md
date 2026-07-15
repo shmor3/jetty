@@ -116,7 +116,7 @@ RUN echo "This command \
 | `RUN command` | Executes a shell command on the host. |
 | `*RUN command` | Executes a shell command *asynchronously*. |
 | `DEP path...` | Declares input files for the next cacheable step (`RUN`/`CPY`/`USE`). Their contents form the cache key. |
-| `OUT path...` | Declares the output files a cacheable step produces. When the `DEP` inputs are unchanged and the outputs still exist, the step is skipped and reported as `CACHED`. |
+| `OUT path...` | Declares the output files a cacheable step produces. When the `DEP` inputs and the existing outputs are both unchanged, the step is skipped and reported as `CACHED`. |
 | `CMD command` | Runs once after all other instructions (and background tasks) are finished. Only one allowed per file. |
 | `DIR path` | Creates a directory recursively (`mkdir -p`) within the build workspace. |
 | `WDR path` | Changes the current working directory for subsequent instructions. |
@@ -146,9 +146,9 @@ Run `jetty` or `jetty status` to view a tabular history of completed and active 
 - `jetty help <command>`: View detailed CLI help.
 
 ## Secrets and 12-Factor Variables
-Jetty automatically loads any `.env` file located in the same directory as the executing `Jettyfile`. These variables are injected straight into the build context and seamlessly made available to `*RUN`, `*USE`, and `*JET` environments!
+By default Jetty loads any `.env` file located in the same directory as the executing `Jettyfile`. These variables are injected straight into the build context and seamlessly made available to `*RUN`, `*USE`, and `*JET` environments! Passing `--env-file` **replaces** this automatic load: only the file you specify is read, and the adjacent `.env` is not.
 
-> **Remote sub-builds:** `SUB github.com/owner/repo[@ref]` fetches and executes a remote Jettyfile with your local build context — including parent args and any loaded `.env` secrets — on your host. Only import repositories you trust, and pin a commit or tag with `@ref`; the default `main` is a mutable branch that can change between runs.
+> **Remote sub-builds:** `SUB github.com/owner/repo[@ref][/path]` fetches and executes a remote Jettyfile with your local build context — including parent args (but not an implicit `.env`, which is skipped for remote fetches) — on your host. Only import repositories you trust, and pin a commit or tag with `@ref`; the default `main` is a mutable branch that can change between runs. The `@ref` may not contain a `/`, so slashed branch names (e.g. `feature/x`) are not supported — use a tag or commit SHA instead.
 
 **Environment Variables:**
 - `JETTY_STATE_DIR`: Overrides the default `.jetty` state storage location.
