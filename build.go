@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +27,12 @@ const (
 var (
 	statusStoreMu  sync.Mutex
 	ErrBuildFailed = errors.New("build failed")
+	asyncSemaphore chan struct{}
 )
+
+func init() {
+	asyncSemaphore = make(chan struct{}, runtime.NumCPU())
+}
 
 type BuildInfo struct {
 	ID         string    `json:"id"`
@@ -213,8 +219,15 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 			wg.Add(1)
 			go func(instruction Instruction, instructionNumber int, instructionState *BuildState) {
 				defer wg.Done()
+				select {
+				case asyncSemaphore <- struct{}{}:
+					defer func() { <-asyncSemaphore }()
+				case <-instructionState.Context.Done():
+					errChan <- instructionState.Context.Err()
+					return
+				}
 				if err := executeInstruction(instructionState, instruction); err != nil {
-					errChan <- fmt.Errorf("(%d/%d) line %d: %w", instructionNumber, len(instructions), instruction.Line, err)
+					errChan <- fmt.Errorf("(%d/%d) line %d [%s%s %s]: %w", instructionNumber, len(instructions), instruction.Line, instruction.Symbol, instruction.Directive, instruction.Args, err)
 					instructionState.cancel()
 				}
 			}(inst, count, asyncState)
@@ -222,7 +235,7 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 		}
 
 		if err := executeInstruction(state, inst); err != nil {
-			syncErr = fmt.Errorf("(%d/%d) line %d: %w", count, len(instructions), inst.Line, err)
+			syncErr = fmt.Errorf("(%d/%d) line %d [%s%s %s]: %w", count, len(instructions), inst.Line, inst.Symbol, inst.Directive, inst.Args, err)
 			state.cancel()
 			break
 		}
@@ -246,7 +259,7 @@ func executeInstructions(state *BuildState, instructions []Instruction) error {
 
 	if cmdInstruction != nil {
 		if err := executeCMD(state, *cmdInstruction); err != nil {
-			return fmt.Errorf("line %d: %w", cmdInstruction.Line, err)
+			return fmt.Errorf("line %d [%s%s %s]: %w", cmdInstruction.Line, cmdInstruction.Symbol, cmdInstruction.Directive, cmdInstruction.Args, err)
 		}
 	}
 	return nil
